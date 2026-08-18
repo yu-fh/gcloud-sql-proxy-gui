@@ -5,6 +5,11 @@
 // buffer. One page serves both windows -- the tray opens `logs` at
 // `index.html#logs` -- so the hash selects the view.
 //
+// The layout deliberately mirrors macOS System Settings rather than a web
+// form: a grouped source list of environments at the top, a grouped detail
+// list for the selected one below, and the window's actions in a footer. There
+// is no in-page tab bar; each window shows exactly one view, chosen by hash.
+//
 // No bundler and no framework: `withGlobalTauri` puts `invoke` on the window,
 // the CSP is `default-src 'self'`, and everything here is plain ES module code
 // served same-origin.
@@ -19,6 +24,10 @@ const invoke = window.__TAURI__.core.invoke;
 /// place rather than re-reading the DOM at save time, so a full re-render is
 /// never needed to keep edits -- and never destroys the field being typed in.
 let profiles = [];
+
+/// Which profile the detail pane is showing, by id. Kept as an id rather than
+/// an index so it survives a reload that reorders or drops profiles.
+let selectedId = null;
 
 /// Proposed connection-name changes from the last `refresh_connection_names`.
 /// Held here, unwritten, until the user clicks Apply.
@@ -61,13 +70,18 @@ function clearError() {
   banner.textContent = '';
 }
 
-/// Transient status text next to a button ("Saved.", "Refreshing…").
+/// Transient status text in the footer ("Saved.", "Refreshing…").
 function note(id, text) {
   $(id).textContent = text || '';
 }
 
 // ---------------------------------------------------------------------------
 // Views
+//
+// Two windows, two views, selected purely by `location.hash`. A web-style tab
+// bar was removed deliberately: each window already has exactly one job, and a
+// tab strip inside a settings window is the single most web-looking thing a
+// native panel can have.
 // ---------------------------------------------------------------------------
 
 function currentView() {
@@ -78,15 +92,22 @@ function currentView() {
 /// runs on load and on every hashchange.
 function applyView() {
   const view = currentView();
-  $('view-profiles').hidden = view !== 'profiles';
-  $('view-logs').hidden = view === 'profiles';
-  $('tab-profiles').classList.toggle('active', view === 'profiles');
-  $('tab-logs').classList.toggle('active', view !== 'profiles');
-  document.title = view === 'logs' ? 'Logs' : 'Profiles';
+  const isLogs = view === 'logs';
+
+  $('view-profiles').hidden = isLogs;
+  $('view-logs').hidden = !isLogs;
+  // The footer's actions all belong to the profile editor; the logs view has
+  // its own Refresh in its own bar.
+  $('footer').hidden = isLogs;
+  document.body.classList.toggle('logs-view', isLogs);
+
+  const title = isLogs ? 'Logs' : 'Profiles';
+  document.title = title;
+  $('window-title').textContent = title;
 
   // Logs are a snapshot, not a stream: load them whenever the view is entered
-  // so switching tabs always shows current output.
-  if (view === 'logs') loadLogs();
+  // so re-showing the window always renders current output.
+  if (isLogs) loadLogs();
 }
 
 // ---------------------------------------------------------------------------
@@ -102,7 +123,7 @@ const STATUS_LABEL = {
 
 const ROLE_LABEL = {
   primary: 'Primary',
-  replica: 'Read replica',
+  replica: 'Read Replica',
 };
 
 async function loadProfiles() {
@@ -111,108 +132,191 @@ async function loadProfiles() {
     // fixCommand -- the view-only fields are stripped again in saveProfiles.
     profiles = await invoke('list_profiles');
     clearError();
-    renderProfiles();
+
+    // Keep the current selection if it still exists, otherwise fall back to
+    // the first profile so the detail pane is never pointlessly empty.
+    if (!profiles.some((p) => p.id === selectedId)) {
+      selectedId = profiles.length > 0 ? profiles[0].id : null;
+    }
+
+    renderEnvList();
+    renderDetail();
     renderLogFilterOptions();
   } catch (error) {
     showError('Could not load profiles', error);
-    $('profiles').textContent = '';
+    clear($('env-list'));
+    clear($('detail'));
   }
 }
 
-function renderProfiles() {
-  const container = $('profiles');
-  clear(container);
+function selectedProfile() {
+  return profiles.find((p) => p.id === selectedId) || null;
+}
+
+function selectedIndex() {
+  return profiles.findIndex((p) => p.id === selectedId);
+}
+
+// --- source list -----------------------------------------------------------
+
+/// The grouped environment list: one row per profile, with a status dot on the
+/// left and the status/production markers on the right. Selecting a row swaps
+/// the detail group below it.
+function renderEnvList() {
+  const list = $('env-list');
+  clear(list);
 
   if (profiles.length === 0) {
-    container.appendChild(el('p', 'empty', 'No profiles configured.'));
+    list.appendChild(el('div', 'row row-empty', 'No profiles configured.'));
     return;
   }
 
-  profiles.forEach((profile, index) => {
-    container.appendChild(renderProfile(profile, index));
+  profiles.forEach((profile) => {
+    const selected = profile.id === selectedId;
+    const row = el('div', 'row row-select');
+    row.setAttribute('role', 'option');
+    row.setAttribute('aria-selected', String(selected));
+    // Rows are reachable by keyboard: only the selected one is in the tab
+    // order, arrow keys move within the list, as a native source list does.
+    row.tabIndex = selected ? 0 : -1;
+    if (selected) row.classList.add('selected');
+    if (profile.danger) row.classList.add('danger');
+
+    const status = profile.status || 'stopped';
+    row.appendChild(el('span', `dot dot-${status}`));
+    row.appendChild(el('span', 'row-label', profile.name || profile.id));
+
+    const trailing = el('span', 'row-trailing');
+    if (profile.danger) {
+      // prd is the main hazard in this app; the marker rides in the list so it
+      // is visible before the row is ever selected.
+      const tag = el('span', 'tag tag-danger', 'Production');
+      tag.title = 'Starting this profile connects you to production.';
+      trailing.appendChild(tag);
+    }
+    if (status !== 'stopped') {
+      trailing.appendChild(
+        el('span', `status status-${status}`, STATUS_LABEL[status] || status),
+      );
+    }
+    row.appendChild(trailing);
+    // The chevron says "this row opens something", exactly as a System
+    // Settings disclosure row does.
+    row.appendChild(el('span', 'chevron', '›'));
+
+    row.addEventListener('click', () => select(profile.id));
+    row.addEventListener('keydown', (event) => onListKey(event, profile.id));
+
+    list.appendChild(row);
   });
 }
 
-function renderProfile(profile, index) {
-  const card = el('section', 'profile');
-  if (profile.danger) card.classList.add('danger');
+function select(id) {
+  if (id === selectedId) return;
+  selectedId = id;
+  renderEnvList();
+  renderDetail();
+}
 
-  // --- header: name, danger marker, status badge -------------------------
-  const header = el('header', 'profile-header');
-  header.appendChild(el('h2', 'profile-name', profile.name || profile.id));
-  if (profile.danger) {
-    const badge = el('span', 'badge badge-danger', 'PRODUCTION');
-    badge.title = 'Starting this profile connects you to production.';
-    header.appendChild(badge);
-  }
-  const status = profile.status || 'stopped';
-  header.appendChild(
-    el('span', `badge badge-${status}`, STATUS_LABEL[status] || status),
-  );
-  card.appendChild(header);
+/// Arrow keys move the selection, Space/Enter re-assert it. Mirrors how a
+/// native list behaves when it has focus.
+function onListKey(event, id) {
+  const index = profiles.findIndex((p) => p.id === id);
+  let next = null;
 
-  // --- failure detail + copyable fix command -----------------------------
-  // The backend already phrases these as instructions, so they are shown
-  // verbatim rather than reworded here.
-  if (profile.detail) {
-    const failure = el('div', 'failure');
-    failure.appendChild(el('p', 'failure-message', profile.detail));
-    const fix = profile.fixCommand || profile.fix_command;
-    if (fix) {
-      const row = el('div', 'fix-row');
-      row.appendChild(el('code', 'fix-command', fix));
-      const copy = el('button', '', 'Copy');
-      copy.type = 'button';
-      copy.addEventListener('click', () => copyText(fix, copy));
-      row.appendChild(copy);
-      failure.appendChild(row);
-    }
-    card.appendChild(failure);
+  if (event.key === 'ArrowDown') next = profiles[index + 1];
+  else if (event.key === 'ArrowUp') next = profiles[index - 1];
+  else if (event.key === 'Enter' || event.key === ' ') next = profiles[index];
+  else return;
+
+  event.preventDefault();
+  if (!next) return;
+  select(next.id);
+  // renderEnvList replaced the nodes, so focus has to be re-established on the
+  // newly selected row rather than the one that was clicked.
+  const rows = $('env-list').querySelectorAll('.row-select');
+  const target = rows[profiles.findIndex((p) => p.id === next.id)];
+  if (target) target.focus();
+}
+
+// --- detail ----------------------------------------------------------------
+
+/// The settings group for the selected environment: a header naming it, any
+/// first-run hint or failure text, then the editable rows.
+function renderDetail() {
+  const container = $('detail');
+  clear(container);
+
+  const profile = selectedProfile();
+  const index = selectedIndex();
+
+  if (!profile) {
+    $('detail-label').textContent = 'Settings';
+    const group = el('div', 'group');
+    group.appendChild(el('div', 'row row-empty', 'Select an environment.'));
+    container.appendChild(group);
+    return;
   }
+
+  $('detail-label').textContent = `${profile.name || profile.id} Settings`;
 
   // --- first-run hint ----------------------------------------------------
   // Seeded profiles ship with empty connection names, so a fresh install
   // cannot start anything. Say so as a next step, not as an error.
   if (profile.instances.some((i) => !i.connectionName)) {
-    const hint = el('div', 'hint');
+    const hint = el('div', 'notice');
     hint.appendChild(
       el(
-        'strong',
-        '',
-        'This profile has no connection names yet, so it cannot start.',
+        'div',
+        'notice-title',
+        'This environment has no connection names yet, so it cannot start.',
       ),
     );
     hint.appendChild(
       el(
-        'p',
-        '',
-        'Click “Refresh connection names” above to look them up from gcloud, ' +
-          'or paste them in below.',
+        'div',
+        'notice-body',
+        'Choose “Refresh Connection Names” below to look them up from gcloud, ' +
+          'or type them in here.',
       ),
     );
-    card.appendChild(hint);
+    container.appendChild(hint);
   }
 
-  // --- editable project --------------------------------------------------
-  const fields = el('div', 'fields');
-  fields.appendChild(
-    field('Project', profile.project, (value) => {
+  // --- failure detail + copyable fix command -----------------------------
+  // The backend already phrases these as instructions, so they are shown
+  // verbatim rather than reworded here.
+  if (profile.detail) {
+    const failure = el('div', 'notice notice-error');
+    failure.appendChild(el('div', 'notice-title', 'Last start failed'));
+    failure.appendChild(el('div', 'notice-body', profile.detail));
+    const fix = profile.fixCommand || profile.fix_command;
+    if (fix) {
+      const row = el('div', 'fix-row');
+      row.appendChild(el('code', 'fix-command', fix));
+      const copy = el('button', 'small', 'Copy');
+      copy.type = 'button';
+      copy.addEventListener('click', () => copyText(fix, copy));
+      row.appendChild(copy);
+      failure.appendChild(row);
+    }
+    container.appendChild(failure);
+  }
+
+  // --- the editable group ------------------------------------------------
+  const group = el('div', 'group');
+
+  group.appendChild(
+    fieldRow('Project', profile.project, (value) => {
       profiles[index].project = value;
       markDirty();
     }),
   );
-  card.appendChild(fields);
 
-  // --- editable instances ------------------------------------------------
   profile.instances.forEach((instance, instanceIndex) => {
-    const row = el('div', 'instance');
-    row.appendChild(
-      el('div', 'role', ROLE_LABEL[instance.role] || instance.role),
-    );
-
-    row.appendChild(
-      field(
-        'Connection name',
+    group.appendChild(
+      fieldRow(
+        ROLE_LABEL[instance.role] || instance.role,
         instance.connectionName,
         (value) => {
           // camelCase: the Rust Instance renames this field, and sending
@@ -221,12 +325,11 @@ function renderProfile(profile, index) {
           markDirty();
         },
         'project:region:instance',
-        'wide',
       ),
     );
 
-    row.appendChild(
-      field(
+    group.appendChild(
+      fieldRow(
         'Port',
         String(instance.port),
         (value) => {
@@ -237,34 +340,58 @@ function renderProfile(profile, index) {
           markDirty();
         },
         '',
-        'narrow',
         'number',
+        'narrow',
       ),
     );
-
-    card.appendChild(row);
   });
 
-  return card;
+  container.appendChild(group);
+
+  // Read-only facts belong in their own group, as System Settings separates
+  // editable controls from information.
+  const info = el('div', 'group');
+  info.appendChild(staticRow('Region', profile.region));
+  info.appendChild(
+    staticRow('Status', STATUS_LABEL[profile.status] || profile.status || '—'),
+  );
+  if (profile.impersonateServiceAccount) {
+    info.appendChild(
+      staticRow('Impersonate', profile.impersonateServiceAccount),
+    );
+  }
+  container.appendChild(info);
 }
 
-/// A labelled text input wired to `onInput`. Labels are associated by
-/// generated id so clicking the label focuses the field.
+/// One list row: label on the left, right-aligned text field on the right.
+/// This is the shape of every editable row in System Settings.
 let fieldSeq = 0;
-function field(label, value, onInput, placeholder, sizeClass, type) {
-  const wrap = el('label', `field ${sizeClass || ''}`.trim());
+function fieldRow(label, value, onInput, placeholder, type, sizeClass) {
+  const row = el('div', 'row');
   const id = `f${fieldSeq++}`;
-  const caption = el('span', 'field-label', label);
+
+  const caption = el('label', 'row-label', label);
   caption.setAttribute('for', id);
+  row.appendChild(caption);
+
   const input = document.createElement('input');
   input.id = id;
+  input.className = `row-input ${sizeClass || ''}`.trim();
   input.type = type || 'text';
   input.value = value === null || value === undefined ? '' : value;
   if (placeholder) input.placeholder = placeholder;
   input.addEventListener('input', () => onInput(input.value));
-  wrap.appendChild(caption);
-  wrap.appendChild(input);
-  return wrap;
+  row.appendChild(input);
+
+  return row;
+}
+
+/// A read-only row: label left, value right, in the secondary colour.
+function staticRow(label, value) {
+  const row = el('div', 'row');
+  row.appendChild(el('span', 'row-label', label));
+  row.appendChild(el('span', 'row-value', value));
+  return row;
 }
 
 function markDirty() {
@@ -334,7 +461,10 @@ async function refreshConnectionNames() {
   const panel = $('changes');
   clear(panel);
   panel.hidden = false;
-  panel.appendChild(el('p', '', 'Asking gcloud for instances…'));
+  panel.appendChild(el('h2', 'group-label', 'Refresh'));
+  const group = el('div', 'group');
+  group.appendChild(el('div', 'row row-empty', 'Asking gcloud for instances…'));
+  panel.appendChild(group);
 
   try {
     const result = await invoke('refresh_connection_names');
@@ -355,55 +485,68 @@ function renderChanges() {
   panel.hidden = false;
 
   if (pendingChanges.length === 0) {
-    panel.appendChild(
-      el('p', '', 'Connection names are already up to date. Nothing to change.'),
+    panel.appendChild(el('h2', 'group-label', 'Refresh'));
+    const group = el('div', 'group');
+    group.appendChild(
+      el(
+        'div',
+        'row row-empty',
+        'Connection names are already up to date. Nothing to change.',
+      ),
     );
+    panel.appendChild(group);
+
+    const actions = el('div', 'change-actions');
     const dismiss = el('button', '', 'Dismiss');
     dismiss.type = 'button';
     dismiss.addEventListener('click', hideChanges);
-    panel.appendChild(dismiss);
+    actions.appendChild(dismiss);
+    panel.appendChild(actions);
     return;
   }
 
   panel.appendChild(
     el(
       'h2',
-      '',
-      `${pendingChanges.length} proposed change${pendingChanges.length === 1 ? '' : 's'}`,
+      'group-label',
+      `${pendingChanges.length} Proposed Change${pendingChanges.length === 1 ? '' : 's'}`,
     ),
   );
-  panel.appendChild(
-    el('p', 'muted', 'Nothing has been written yet. Review, then apply.'),
-  );
 
-  const list = el('ul', 'change-list');
+  const group = el('div', 'group');
   pendingChanges.forEach((change) => {
-    const item = el('li', 'change');
-    item.appendChild(
+    const row = el('div', 'row row-change');
+    row.appendChild(
       el(
-        'div',
-        'change-where',
+        'span',
+        'row-label',
         `${change.profileId ?? change.profile_id} · ${ROLE_LABEL[change.role] || change.role}`,
       ),
     );
+    const diff = el('span', 'diff');
     // An empty `from` is the first-run case, where the seeded profile simply
-    // had no name yet -- "(not set)" reads better than a blank line.
-    item.appendChild(el('div', 'change-from', change.from || '(not set)'));
-    item.appendChild(el('div', 'change-arrow', '→'));
-    item.appendChild(el('div', 'change-to', change.to));
-    list.appendChild(item);
+    // had no name yet -- "Not set" reads better than a blank line.
+    diff.appendChild(el('span', 'diff-from', change.from || 'Not set'));
+    diff.appendChild(el('span', 'diff-arrow', '→'));
+    diff.appendChild(el('span', 'diff-to', change.to));
+    row.appendChild(diff);
+    group.appendChild(row);
   });
-  panel.appendChild(list);
+  panel.appendChild(group);
 
-  const actions = el('div', 'toolbar');
-  const apply = el('button', 'primary', 'Apply these changes');
-  apply.type = 'button';
-  apply.addEventListener('click', applyChanges);
+  panel.appendChild(
+    el('p', 'footnote', 'Nothing has been written yet. Review, then apply.'),
+  );
+
+  const actions = el('div', 'change-actions');
   const cancel = el('button', '', 'Cancel');
   cancel.type = 'button';
   cancel.addEventListener('click', hideChanges);
-  actions.appendChild(apply);
+  const apply = el('button', 'default', 'Apply Changes');
+  apply.type = 'button';
+  apply.addEventListener('click', applyChanges);
   actions.appendChild(cancel);
+  actions.appendChild(apply);
   panel.appendChild(actions);
 }
 
@@ -448,7 +591,7 @@ function renderLogFilterOptions() {
 
   const all = document.createElement('option');
   all.value = '';
-  all.textContent = 'All profiles';
+  all.textContent = 'All Profiles';
   select.appendChild(all);
 
   profiles.forEach((profile) => {

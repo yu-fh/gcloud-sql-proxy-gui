@@ -1,45 +1,91 @@
-/* This window sits next to native menu bar UI, so it uses the system font
-   stack and follows the system appearance rather than picking its own look.
-   Colours are defined once as custom properties and overridden wholesale in
-   the dark-scheme block. */
+/* A macOS settings window, rebuilt in HTML.
+ *
+ * Tauri renders a webview, so there are no real AppKit controls here -- what
+ * this file does is reproduce the conventions of System Settings closely
+ * enough that the window reads as native: grouped inset lists with hairline
+ * separators, 13px system type, right-aligned values, and the system accent.
+ *
+ * Colours are custom properties, overridden wholesale in the dark block with
+ * macOS's actual dark values (dark grey surfaces, never pure black). Where the
+ * platform exposes a real system colour it is used directly, so the window
+ * follows the user's chosen accent rather than a hardcoded blue.
+ */
 
 :root {
-  --bg: #f5f5f7;
-  --card: #ffffff;
-  --text: #1d1d1f;
-  --muted: #6e6e73;
-  --border: #d2d2d7;
+  color-scheme: light dark;
+
+  /* Window background is the slightly grey sheet System Settings uses; groups
+     sit on top of it in white, which is what makes an inset list read as
+     inset. */
+  --window-bg: #f2f2f7;
+  --group-bg: #ffffff;
+  --group-bg-hover: rgba(0, 0, 0, 0.03);
+
+  --text: #000000;
+  --text-secondary: rgba(60, 60, 67, 0.6);
+  --text-tertiary: rgba(60, 60, 67, 0.3);
+
+  /* Separators are hairlines, not 1px borders: on a Retina display they land
+     on a single device pixel. */
+  --separator: rgba(60, 60, 67, 0.18);
+  --border: rgba(0, 0, 0, 0.14);
+
   --field-bg: #ffffff;
-  --accent: #0071e3;
+  --field-border: rgba(0, 0, 0, 0.18);
+
+  --control-bg: #ffffff;
+  --control-border: rgba(0, 0, 0, 0.12);
+
+  /* AccentColor follows the user's System Settings accent; the literal is the
+     fallback for engines that do not resolve it. */
+  --accent: #0a69da;
+  --accent: AccentColor;
   --accent-text: #ffffff;
-  --danger: #c9252d;
-  --danger-bg: #fdeded;
-  --hint-bg: #fff8e1;
-  --hint-border: #e6c200;
-  --running: #1d7d3f;
-  --running-bg: #e4f4e9;
+  --accent-text: AccentColorText;
+  --on-accent-secondary: rgba(255, 255, 255, 0.75);
+
+  --red: #d70015;
+  --red-bg: rgba(215, 0, 21, 0.09);
+  --green: #1c7c31;
+  --orange: #b25000;
+
   --logs-bg: #ffffff;
-  --shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+
+  /* Overlay title bars are ~28px on a standard-density Mac; the extra room
+     keeps the window title clear of the traffic lights. */
+  --titlebar-height: 38px;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #1e1e1e;
-    --card: #2a2a2c;
-    --text: #f5f5f7;
-    --muted: #9a9a9f;
-    --border: #414146;
-    --field-bg: #1c1c1e;
+    --window-bg: #1e1e1e;
+    --group-bg: #2c2c2e;
+    --group-bg-hover: rgba(255, 255, 255, 0.05);
+
+    --text: #ffffff;
+    --text-secondary: rgba(235, 235, 245, 0.6);
+    --text-tertiary: rgba(235, 235, 245, 0.3);
+
+    --separator: rgba(235, 235, 245, 0.18);
+    --border: rgba(255, 255, 255, 0.16);
+
+    --field-bg: rgba(255, 255, 255, 0.06);
+    --field-border: rgba(255, 255, 255, 0.2);
+
+    --control-bg: #4a4a4d;
+    --control-border: rgba(255, 255, 255, 0.12);
+
     --accent: #0a84ff;
+    --accent: AccentColor;
     --accent-text: #ffffff;
-    --danger: #ff6b6b;
-    --danger-bg: #3a1f21;
-    --hint-bg: #3a3320;
-    --hint-border: #7a6a20;
-    --running: #4ad46a;
-    --running-bg: #1f3324;
-    --logs-bg: #161618;
-    --shadow: none;
+    --accent-text: AccentColorText;
+
+    --red: #ff453a;
+    --red-bg: rgba(255, 69, 58, 0.16);
+    --green: #30d158;
+    --orange: #ff9f0a;
+
+    --logs-bg: #1c1c1e;
   }
 }
 
@@ -47,353 +93,603 @@
   box-sizing: border-box;
 }
 
+html,
+body {
+  height: 100%;
+}
+
 body {
   margin: 0;
-  padding: 0 14px 16px;
+  /* macOS UI type is 13px. Web-sized type is most of what makes a webview look
+     like a web page rather than a window. */
   font:
-    13px/1.45 -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui,
+    13px/1.4 -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui,
     sans-serif;
+  /* Matches AppKit's own text rendering rather than the browser default. */
+  -webkit-font-smoothing: antialiased;
   color: var(--text);
-  background: var(--bg);
-}
+  background: var(--window-bg);
 
-h2 {
-  font-size: 14px;
-  margin: 0;
-}
-
-/* --- tabs ---------------------------------------------------------------- */
-
-/* Sticky so the view switcher stays reachable while a long profile list
-   scrolls. It needs an opaque background and a negative side margin that
-   re-covers the body padding, otherwise cards show through beside and beneath
-   it as they scroll under. */
-.tabs {
+  /* Column layout: fixed title bar, scrolling content, fixed footer -- the
+     shape of a settings sheet. */
   display: flex;
-  gap: 4px;
-  position: sticky;
-  top: 0;
-  margin: 0 -14px;
-  padding: 10px 14px 8px;
-  background: var(--bg);
-  border-bottom: 1px solid var(--border);
-  z-index: 2;
+  flex-direction: column;
+  /* The window is chrome, not a document: it does not rubber-band. */
+  overflow: hidden;
 }
 
-.tab {
-  padding: 4px 12px;
-  border-radius: 6px;
-  text-decoration: none;
-  color: var(--muted);
-  font-weight: 500;
-}
+/* --- title bar ------------------------------------------------------------
+   The window uses TitleBarStyle::Overlay, so the OS draws the traffic lights
+   floating over the page. This strip supplies the clearance they need and the
+   drag region a real title bar would have provided. */
 
-.tab:hover {
-  background: var(--card);
-}
-
-.tab.active {
-  background: var(--accent);
-  color: var(--accent-text);
-}
-
-/* --- shared -------------------------------------------------------------- */
-
-.banner {
-  margin: 10px 0 0;
-  padding: 9px 11px;
-  border: 1px solid var(--danger);
-  border-radius: 6px;
-  background: var(--danger-bg);
-  color: var(--danger);
-  /* Backend errors can be long and are the whole point of the banner. */
-  white-space: pre-wrap;
-}
-
-.toolbar {
+.titlebar {
+  flex: 0 0 auto;
+  height: var(--titlebar-height);
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
-  margin: 12px 0;
+  justify-content: center;
+  background: var(--window-bg);
+  /* Everything in the strip drags the window; interactive children opt back
+     out with .no-drag. There are none today, which is why the strip holds only
+     a title. */
+  -webkit-app-region: drag;
+  user-select: none;
 }
 
-.note {
-  color: var(--muted);
-}
-
-.muted {
-  color: var(--muted);
-  margin: 2px 0 8px;
-}
-
-.empty {
-  color: var(--muted);
-}
-
-button {
-  font: inherit;
-  padding: 4px 12px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--card);
+.titlebar-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
   color: var(--text);
 }
 
-button:hover {
-  border-color: var(--accent);
+/* --- content --------------------------------------------------------------
+   The only scrolling region. Padding matches System Settings' generous inset
+   around its grouped lists. */
+
+.content {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 4px 20px 20px;
 }
 
-button.primary {
+.view {
+  /* `flex: 1` (not the `0 1 auto` default) is what lets the logs view claim the
+     whole content column, so the <pre> inside it can stretch to the window
+     instead of collapsing to its min-height. */
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.view[hidden] {
+  display: none;
+}
+
+/* The logs window is a single tall pane with no footer, so the content region
+   must not add its own bottom inset. */
+body.logs-view .content {
+  padding-bottom: 14px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* --- grouped lists --------------------------------------------------------
+   The core macOS pattern: a small secondary header, then a rounded rectangle
+   of rows with hairline separators that inset from the left edge. */
+
+.group-label {
+  margin: 14px 2px 6px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.group {
+  background: var(--group-bg);
+  border-radius: 10px;
+  /* A hairline outline rather than a shadow: cards with drop shadows are a web
+     idiom, System Settings groups have none. */
+  box-shadow: 0 0 0 0.5px var(--border);
+  overflow: hidden;
+}
+
+/* When a load fails the list has no rows; a collapsed group would otherwise
+   leave a stray hairline under its header. */
+.group:empty {
+  display: none;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  /* ~30px tall: comfortable without being a web list item. */
+  min-height: 30px;
+  padding: 4px 14px;
+}
+
+/* Separators inset from the left so they start under the label, not under the
+   rounded corner -- the detail that most says "AppKit". */
+.row + .row {
+  box-shadow: inset 0 0.5px 0 var(--separator);
+}
+
+.row-label {
+  flex: 0 0 auto;
+  color: var(--text);
+}
+
+/* The value side takes the slack and right-aligns, so every value in a group
+   lines up on its right edge. */
+.row-value {
+  flex: 1 1 auto;
+  min-width: 0;
+  text-align: right;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.row-empty {
+  color: var(--text-secondary);
+  min-height: 34px;
+}
+
+/* --- selectable rows (the environment list) ------------------------------- */
+
+.row-select {
+  cursor: default;
+  min-height: 34px;
+}
+
+.row-select:hover:not(.selected) {
+  background: var(--group-bg-hover);
+}
+
+/* Selection is the accent fill of a native source list. */
+.row-select.selected {
   background: var(--accent);
-  border-color: var(--accent);
+}
+
+.row-select.selected,
+.row-select.selected .row-label {
   color: var(--accent-text);
+}
+
+.row-select.selected .chevron,
+.row-select.selected .status {
+  color: var(--on-accent-secondary);
+}
+
+/* On the accent fill the status colours lose their contrast, so the dot goes
+   solid white and the hollow "stopped" ring follows suit. */
+.row-select.selected .dot {
+  background: var(--accent-text);
+  box-shadow: none;
+}
+
+.row-select.selected .dot-stopped {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--on-accent-secondary);
+}
+
+.row-select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.row-select .row-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.row-trailing {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.chevron {
+  flex: 0 0 auto;
+  color: var(--text-tertiary);
+  font-size: 15px;
+  line-height: 1;
+}
+
+/* Status dot, as the tray icon and Finder sidebars use. */
+.dot {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--text-tertiary);
+}
+
+.dot-running {
+  background: var(--green);
+  box-shadow: none;
+}
+
+.dot-starting {
+  background: var(--orange);
+  box-shadow: none;
+}
+
+.dot-failed {
+  background: var(--red);
+  box-shadow: none;
+}
+
+.status {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.status-failed {
+  color: var(--red);
+}
+
+/* prd is one click from live. The tag stays legible on the accent fill of a
+   selected row, which is why it carries its own background. */
+.tag {
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.tag-danger {
+  background: var(--red-bg);
+  color: var(--red);
+  box-shadow: inset 0 0 0 0.5px var(--red);
+}
+
+.row-select.selected .tag-danger {
+  background: var(--accent-text);
+  color: var(--red);
+  box-shadow: none;
+}
+
+/* --- fields ---------------------------------------------------------------
+   Right-aligned inset text fields, sized to the row rather than to the width
+   of the window. */
+
+.row-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  font: inherit;
+  text-align: right;
+  padding: 3px 7px;
+  border: 0.5px solid var(--field-border);
+  border-radius: 5px;
+  background: var(--field-bg);
+  color: var(--text);
+  /* Subtle inset, as AppKit's bezel has. */
+  box-shadow: inset 0 1px 1px rgba(0, 0, 0, 0.04);
+}
+
+/* A narrow field still has to end on the group's right edge, or the column of
+   values stops lining up. Auto margin pushes it there instead of widening it. */
+.row-input.narrow {
+  flex: 0 0 84px;
+  margin-left: auto;
+}
+
+.row-input::placeholder {
+  color: var(--text-tertiary);
+}
+
+.row-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  /* The focus ring AppKit draws around a focused field. */
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 35%, transparent);
 }
 
 select {
   font: inherit;
-  padding: 3px 6px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--field-bg);
+  font-size: 12px;
+  padding: 2px 6px;
+  border: 0.5px solid var(--control-border);
+  border-radius: 5px;
+  background: var(--control-bg);
   color: var(--text);
 }
 
-/* --- profiles ------------------------------------------------------------ */
+/* --- buttons --------------------------------------------------------------
+   Bordered secondary buttons and one accent-filled default, as a settings
+   sheet has. Never full-width. */
 
-.profile {
-  margin-bottom: 12px;
-  padding: 12px 14px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--card);
-  box-shadow: var(--shadow);
-}
-
-/* Production is one click from on; the left rule makes prd unmistakable at a
-   glance even before the badge is read. */
-.profile.danger {
-  border-left: 4px solid var(--danger);
-}
-
-.profile-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 8px;
-}
-
-.profile-name {
-  font-size: 15px;
-  font-weight: 600;
-}
-
-.badge {
-  padding: 1px 8px;
-  border-radius: 10px;
-  font-size: 11px;
-  font-weight: 600;
-  border: 1px solid var(--border);
-  color: var(--muted);
-}
-
-.badge-running {
-  background: var(--running-bg);
-  border-color: var(--running);
-  color: var(--running);
-}
-
-.badge-failed {
-  background: var(--danger-bg);
-  border-color: var(--danger);
-  color: var(--danger);
-}
-
-.badge-danger {
-  background: var(--danger-bg);
-  border-color: var(--danger);
-  color: var(--danger);
-  letter-spacing: 0.04em;
-}
-
-.failure {
-  margin-bottom: 10px;
-  padding: 9px 11px;
-  border: 1px solid var(--danger);
+button {
+  font: inherit;
+  font-size: 13px;
+  padding: 3px 13px;
+  min-height: 22px;
+  border: 0.5px solid var(--control-border);
   border-radius: 6px;
-  background: var(--danger-bg);
+  background: var(--control-bg);
+  color: var(--text);
+  box-shadow: 0 0.5px 1px rgba(0, 0, 0, 0.08);
 }
 
-.failure-message {
-  margin: 0 0 8px;
-  color: var(--danger);
+button:hover {
+  background: color-mix(in srgb, var(--control-bg) 92%, var(--text));
+}
+
+button:active {
+  background: color-mix(in srgb, var(--control-bg) 84%, var(--text));
+}
+
+button:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+/* The default button: accent-filled, and the one Return would activate. */
+button.default {
+  background: var(--accent);
+  border-color: transparent;
+  color: var(--accent-text);
+  font-weight: 500;
+}
+
+button.default:hover {
+  background: color-mix(in srgb, var(--accent) 88%, black);
+}
+
+button.default:active {
+  background: color-mix(in srgb, var(--accent) 78%, black);
+}
+
+button.small {
+  font-size: 11px;
+  padding: 1px 8px;
+  min-height: 18px;
+}
+
+/* --- notices --------------------------------------------------------------
+   The first-run hint and the failure detail. Both sit above the settings group
+   they concern, styled as quiet panels rather than coloured web banners. */
+
+.notice {
+  margin-bottom: 10px;
+  padding: 9px 12px;
+  border-radius: 8px;
+  background: var(--group-bg);
+  box-shadow: 0 0 0 0.5px var(--border);
+}
+
+.notice-title {
+  font-weight: 500;
+}
+
+.notice-body {
+  margin-top: 3px;
+  color: var(--text-secondary);
+}
+
+.notice-error {
+  background: var(--red-bg);
+  box-shadow: 0 0 0 0.5px var(--red);
+}
+
+.notice-error .notice-title {
+  color: var(--red);
+}
+
+.notice-error .notice-body {
+  color: var(--text);
 }
 
 .fix-row {
   display: flex;
   align-items: center;
   gap: 8px;
-  flex-wrap: wrap;
+  margin-top: 8px;
 }
 
 .fix-command {
-  flex: 1 1 260px;
-  padding: 5px 8px;
-  border: 1px solid var(--border);
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 4px 7px;
   border-radius: 5px;
+  border: 0.5px solid var(--field-border);
   background: var(--field-bg);
   color: var(--text);
   font-family: ui-monospace, 'SF Mono', Menlo, monospace;
-  font-size: 12px;
-  /* Long commands wrap rather than overflowing the card. */
+  font-size: 11px;
+  /* Long commands wrap rather than overflowing the panel. */
   overflow-wrap: anywhere;
 }
 
-/* The first-run state for every fresh install: a next step, not an error, so
-   it is styled as a notice rather than in the failure red. */
-.hint {
-  margin-bottom: 10px;
-  padding: 9px 11px;
-  border: 1px solid var(--hint-border);
-  border-left: 3px solid var(--hint-border);
-  border-radius: 6px;
-  background: var(--hint-bg);
+/* Errors from any invoke. Kept as a strip under the title bar so it is
+   impossible to miss and impossible to scroll past unnoticed. */
+.banner {
+  flex: 0 0 auto;
+  margin: 0 20px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: var(--red-bg);
+  box-shadow: 0 0 0 0.5px var(--red);
+  color: var(--red);
+  /* Backend errors can be long and are the whole point of the banner. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
-.hint p {
-  margin: 4px 0 0;
+.banner[hidden] {
+  display: none;
 }
 
-.fields,
-.instance {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  gap: 10px;
+.footnote {
+  margin: 6px 2px 0;
+  font-size: 11px;
+  color: var(--text-secondary);
 }
 
-.instance {
-  margin-top: 10px;
-  padding-top: 10px;
-  border-top: 1px solid var(--border);
-}
-
-.role {
-  width: 90px;
-  padding-bottom: 5px;
-  color: var(--muted);
-  font-weight: 600;
-}
-
-.field {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  flex: 1 1 220px;
-}
-
-.field.wide {
-  flex: 3 1 320px;
-}
-
-.field.narrow {
-  flex: 0 0 90px;
-}
-
-.field-label {
-  color: var(--muted);
+.note {
+  color: var(--text-secondary);
   font-size: 11px;
 }
 
-input {
-  font: inherit;
-  padding: 5px 7px;
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  background: var(--field-bg);
-  color: var(--text);
-  width: 100%;
+/* --- proposed changes ----------------------------------------------------- */
+
+.changes[hidden] {
+  display: none;
 }
 
-input:focus {
-  outline: 2px solid var(--accent);
-  outline-offset: -1px;
+.row-change {
+  align-items: baseline;
+  padding-top: 6px;
+  padding-bottom: 6px;
 }
 
-/* --- proposed changes ---------------------------------------------------- */
-
-.changes {
-  margin: 12px 0;
-  padding: 12px 14px;
-  border: 1px solid var(--accent);
-  border-radius: 8px;
-  background: var(--card);
-}
-
-.change-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-
-/* from -> to on one row, with the connection names monospaced so the changed
-   Terraform suffix is easy to spot. */
-.change {
-  display: grid;
-  grid-template-columns: 120px 1fr auto 1fr;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 0;
-  border-top: 1px solid var(--border);
-}
-
-.change-where {
-  font-weight: 600;
-}
-
-.change-from,
-.change-to,
-.change-arrow {
-  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
-  font-size: 12px;
+.row-change .row-label {
+  flex: 0 0 130px;
+  font-size: 11px;
+  color: var(--text-secondary);
   overflow-wrap: anywhere;
 }
 
-.change-from {
-  color: var(--muted);
+.diff {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: flex-end;
+  gap: 6px;
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-size: 11px;
+  text-align: right;
+}
+
+.diff-from,
+.diff-to {
+  overflow-wrap: anywhere;
+}
+
+.diff-from {
+  color: var(--text-secondary);
   text-decoration: line-through;
 }
 
-.change-to {
-  color: var(--running);
+.diff-arrow {
+  color: var(--text-tertiary);
 }
 
-/* Narrow window: stack the diff instead of squeezing four columns. */
-@media (max-width: 720px) {
-  .change {
-    grid-template-columns: 1fr;
-  }
-
-  .change-arrow {
-    display: none;
-  }
+.diff-to {
+  color: var(--text);
 }
 
-/* --- logs ---------------------------------------------------------------- */
+.change-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+/* --- footer ---------------------------------------------------------------
+   The window's actions. Right-aligned with the default button last, as every
+   macOS sheet places them. */
+
+.footer {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 10px 20px 14px;
+  background: var(--window-bg);
+  /* Hairline above, so the actions read as chrome rather than as page
+     content that happens to be last. */
+  box-shadow: inset 0 0.5px 0 var(--separator);
+}
+
+.footer[hidden] {
+  display: none;
+}
+
+/* Pushes the note left and the buttons right. */
+.footer .note {
+  margin-right: auto;
+}
+
+/* --- logs ----------------------------------------------------------------- */
+
+.logs-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0 10px;
+}
+
+.logs-bar-label {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.push {
+  margin-left: auto;
+}
 
 .logs {
+  flex: 1 1 auto;
+  min-height: 120px;
   margin: 0;
   padding: 10px 12px;
-  height: calc(100vh - 130px);
-  min-height: 180px;
   overflow: auto;
-  border: 1px solid var(--border);
   border-radius: 8px;
+  box-shadow: 0 0 0 0.5px var(--border);
   background: var(--logs-bg);
   color: var(--text);
   font-family: ui-monospace, 'SF Mono', Menlo, monospace;
-  font-size: 12px;
+  font-size: 11px;
   line-height: 1.45;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+/* --- narrow window --------------------------------------------------------
+   Below the design width the label/value split stops fitting, so rows stack
+   and values left-align. */
+
+@media (max-width: 460px) {
+  .content,
+  .footer,
+  .banner {
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+
+  .banner {
+    margin-left: 12px;
+    margin-right: 12px;
+  }
+
+  .row-change {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 2px;
+  }
+
+  .row-change .row-label {
+    flex: 0 0 auto;
+  }
+
+  .diff {
+    justify-content: flex-start;
+    text-align: left;
+  }
 }

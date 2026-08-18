@@ -592,6 +592,11 @@ fn open_window<R: Runtime>(
 
     let built = WebviewWindowBuilder::new(app, label, WebviewUrl::App(url.into()))
         .title(title)
+        // A unified title bar, as native settings windows have: the page draws
+        // under the traffic lights instead of below a separate bar. The page
+        // pays for this with a header strip that supplies the clearance and
+        // the drag region -- see `.titlebar` in styles.css.
+        .title_bar_style(tauri::TitleBarStyle::Overlay)
         .inner_size(width, height)
         .resizable(true)
         .build();
