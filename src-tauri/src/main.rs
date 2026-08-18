@@ -1,6 +1,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-mod core;
+// The core modules now live in the library target (`src/lib.rs`) so integration
+// tests can import them. The binary will pull them in as
+// `fh_cloud_sql_proxy_gui::core::*` once the Tauri command layer needs them
+// (Task 9); nothing here references them yet, so importing now would only
+// produce an unused-import warning.
 
 fn main() {
     tauri::Builder::default()
