@@ -102,27 +102,39 @@ pub fn classify(line: &str) -> ProxyEvent {
     ProxyEvent::Noise
 }
 
-/// Extract a port number from a line like
+/// Extract the listener port from a bind-failure line such as
 /// `listen tcp 127.0.0.1:15432: bind: address already in use`.
 ///
-/// Looks for the first `:<digits>` group that is immediately followed by a
-/// non-digit (or end of string), scanning left to right.
+/// Anchors on the `listen tcp` token rather than scanning the line for any
+/// `:digits` group. Every proxy line is timestamped, so a left-to-right scan
+/// matches the timestamp first: `10:23:45` yields port 23, and `10:00:00`
+/// yields port 0 — the app would name a port the user does not hold.
+/// Bracketed IPv6 (`[::1]:15432`) is likewise mis-read as port 1.
+///
+/// Returns the digit run after the address token's final colon, or `None`
+/// when the line has no `listen tcp` address or the port is out of range.
 fn extract_port(line: &str) -> Option<u16> {
-    let bytes = line.as_bytes();
-    for (i, b) in bytes.iter().enumerate() {
-        if *b != b':' {
-            continue;
-        }
-        let rest = &line[i + 1..];
-        let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
-        if digits.is_empty() {
-            continue;
-        }
-        if let Ok(port) = digits.parse::<u16>() {
-            return Some(port);
-        }
+    let lower = line.to_lowercase();
+    let idx = lower.find("listen tcp")?;
+
+    // Skip the "listen tcp" token and any address-family suffix (tcp4/tcp6).
+    let after = idx + "listen tcp".len();
+    let start = after
+        + lower[after..]
+            .chars()
+            .take_while(|c| c.is_ascii_digit())
+            .count();
+
+    let token = line[start..].split_whitespace().next()?;
+    let token = token.trim_end_matches(':');
+
+    // rsplit_once takes the digits after the FINAL colon, which is the port
+    // for both "127.0.0.1:15432" and bracketed IPv6 "[::1]:15432".
+    let port_str = token.rsplit_once(':')?.1;
+    if port_str.is_empty() || !port_str.chars().all(|c| c.is_ascii_digit()) {
+        return None;
     }
-    None
+    port_str.parse::<u16>().ok()
 }
 
 #[cfg(test)]
@@ -144,6 +156,77 @@ mod tests {
             ProxyEvent::Failure(d) => {
                 assert_eq!(d.kind, FailureKind::PortInUse);
                 assert!(d.message.contains("15432"), "message: {}", d.message);
+            }
+            other => panic!("expected Failure(PortInUse), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn port_is_extracted_from_timestamped_lines() {
+        // Proxy output is timestamped. A left-to-right scan for ":digits"
+        // finds the ":00" in "10:00:00" and reports port 0, so the extraction
+        // must anchor on the listener address instead.
+        let line = "2026/08/18 10:00:00 listen tcp 127.0.0.1:15433: bind: address already in use";
+        match classify(line) {
+            ProxyEvent::Failure(d) => {
+                assert_eq!(d.kind, FailureKind::PortInUse);
+                assert!(d.message.contains("15433"), "message: {}", d.message);
+                assert!(
+                    !d.message.contains("Port 0"),
+                    "extracted the timestamp, not the port: {}",
+                    d.message
+                );
+            }
+            other => panic!("expected Failure(PortInUse), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn port_is_not_taken_from_the_timestamps_minutes_field() {
+        // A 10:23:45 timestamp made the old scan report "Port 23".
+        let line = "2024/01/15 10:23:45 failed to start listener: listen tcp 127.0.0.1:15432: \
+                    bind: address already in use";
+        match classify(line) {
+            ProxyEvent::Failure(d) => {
+                assert!(d.message.contains("15432"), "message: {}", d.message);
+                assert!(!d.message.contains("Port 23"), "message: {}", d.message);
+            }
+            other => panic!("expected Failure(PortInUse), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn port_is_extracted_from_tcp6_zone_scoped_address() {
+        let line = "listen tcp6 [fe80::1%en0]:15433: bind: address already in use";
+        match classify(line) {
+            ProxyEvent::Failure(d) => {
+                assert_eq!(d.kind, FailureKind::PortInUse);
+                assert!(d.message.contains("15433"), "message: {}", d.message);
+            }
+            other => panic!("expected Failure(PortInUse), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn port_is_extracted_from_bracketed_ipv6_address() {
+        let line = "listen tcp [::1]:15432: bind: address already in use";
+        match classify(line) {
+            ProxyEvent::Failure(d) => {
+                assert_eq!(d.kind, FailureKind::PortInUse);
+                assert!(d.message.contains("15432"), "message: {}", d.message);
+            }
+            other => panic!("expected Failure(PortInUse), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn out_of_range_port_falls_back_to_generic_message() {
+        // 70000 does not fit in u16; the message must still be useful.
+        let line = "listen tcp 127.0.0.1:70000: bind: address already in use";
+        match classify(line) {
+            ProxyEvent::Failure(d) => {
+                assert_eq!(d.kind, FailureKind::PortInUse);
+                assert!(d.message.contains("A local port"), "message: {}", d.message);
             }
             other => panic!("expected Failure(PortInUse), got {other:?}"),
         }
