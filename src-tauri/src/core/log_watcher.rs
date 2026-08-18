@@ -151,16 +151,30 @@ mod tests {
 
     #[test]
     fn port_in_use_takes_precedence_over_network_wording() {
-        // Contains "listen tcp" which could be mistaken for "dial tcp"/network
-        // wording if the port-in-use check ran after the VPN checks.
-        let line =
-            "failed to start listener: listen tcp 127.0.0.1:15433: bind: address already in use";
+        // A line carrying BOTH a bind failure and network wording. Only the
+        // ordering of the checks decides the answer here, so this test fails
+        // if the port-in-use block is moved below the VPN block.
+        let line = "listen tcp 127.0.0.1:15433: bind: address already in use (dial tcp \
+                    10.1.2.3:3307: i/o timeout)";
         match classify(line) {
             ProxyEvent::Failure(d) => {
                 assert_eq!(d.kind, FailureKind::PortInUse);
-                assert_ne!(d.kind, FailureKind::OffVpn);
+                assert!(d.message.contains("15433"), "message: {}", d.message);
             }
             other => panic!("expected Failure(PortInUse), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn stale_instance_outranks_network_wording() {
+        // A dial failure against a replaced instance mentions both. The stale
+        // name is the actionable cause; the timeout is only a symptom, so
+        // StaleInstance must win.
+        let line = "Cloud SQL instance \"proj:us-central1:terraform-123\" does not exist: \
+                    dial tcp 10.1.2.3:3307: i/o timeout";
+        match classify(line) {
+            ProxyEvent::Failure(d) => assert_eq!(d.kind, FailureKind::StaleInstance),
+            other => panic!("expected Failure(StaleInstance), got {other:?}"),
         }
     }
 
