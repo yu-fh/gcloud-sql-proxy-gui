@@ -172,6 +172,26 @@ The runtime call `app.set_activation_policy(ActivationPolicy::Accessory)` in Ste
 
 Note: `windows: []` — no window is created at launch. Windows are created on demand in Task 9.
 
+- [ ] **Step 8b: Create `src-tauri/capabilities/default.json`**
+
+Tauri 2 gates **plugin** commands behind an ACL. Our own `#[tauri::command]` functions are not gated (restricting them is opt-in via `AppManifest::commands` in `build.rs`, which we do not use), so `invoke('list_profiles')` works without any entry here. But the autostart plugin's `enable`/`disable`/`is_enabled` commands — used by Task 10's "Launch at Login" — *are* gated, and without this file the generated `gen/schemas/capabilities.json` is `{}` and those calls fail at runtime.
+
+Windows are created on demand with the labels `profiles` and `logs` (Task 10), so both are listed.
+
+```json
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Permissions for the profile editor and log viewer windows",
+  "windows": ["profiles", "logs"],
+  "permissions": [
+    "core:default",
+    "autostart:default",
+    "dialog:default"
+  ]
+}
+```
+
 - [ ] **Step 9: Create a placeholder icon**
 
 Run:
