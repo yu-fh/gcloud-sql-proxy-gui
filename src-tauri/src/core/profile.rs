@@ -14,7 +14,7 @@ pub const CURRENT_SCHEMA_VERSION: u32 = 1;
 /// Which role a Cloud SQL instance plays within a profile.
 ///
 /// Convention: primary always binds port 15432, replica always binds 15433.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum InstanceRole {
     Primary,
@@ -92,17 +92,6 @@ pub struct ProfileConfig {
 /// Errors produced while validating a `ProfileConfig`.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum ValidationError {
-    /// Two different profiles use the same port. Reserved for callers that
-    /// want to treat cross-profile sharing as an error; `ProfileConfig::validate`
-    /// does not use this variant, since cross-profile sharing is allowed by
-    /// design (ports are exclusive-by-default, not exclusive-by-validation).
-    #[error("port {port} is used by both '{first}' and '{second}'")]
-    DuplicatePort {
-        port: u16,
-        first: String,
-        second: String,
-    },
-
     /// The same port appears twice within a single profile's instance list.
     /// Such a profile could never start, so this is always an error.
     #[error("port {port} appears twice in profile '{profile}'")]
@@ -111,6 +100,15 @@ pub enum ValidationError {
     /// A profile has no instances configured.
     #[error("profile '{0}' has no instances")]
     NoInstances(String),
+
+    /// The same role appears twice within a single profile. Instances are
+    /// matched by role when reconciling connection names against gcloud, so
+    /// two instances sharing a role would make that reconciliation ambiguous.
+    #[error("profile '{profile}' has more than one {role:?} instance")]
+    DuplicateRole {
+        profile: String,
+        role: InstanceRole,
+    },
 
     /// Two profiles share the same id.
     #[error("duplicate profile id '{0}'")]
@@ -156,6 +154,16 @@ impl ProfileConfig {
                     return Err(ValidationError::DuplicatePortInProfile {
                         port,
                         profile: profile.id.clone(),
+                    });
+                }
+            }
+
+            let mut roles_seen = std::collections::HashSet::new();
+            for instance in &profile.instances {
+                if !roles_seen.insert(instance.role) {
+                    return Err(ValidationError::DuplicateRole {
+                        profile: profile.id.clone(),
+                        role: instance.role,
                     });
                 }
             }
@@ -300,6 +308,31 @@ mod tests {
         empty.instances.clear();
         let cfg = config(vec![empty]);
         assert_eq!(cfg.validate(), Err(ValidationError::NoInstances("dev".to_string())));
+    }
+
+    #[test]
+    fn validate_rejects_two_instances_sharing_a_role() {
+        // Reconciliation against gcloud matches instances by role, so two
+        // primaries would make it ambiguous which one to update.
+        let mut dev = standard_profile("dev");
+        dev.instances = vec![
+            primary("proj:us-central1:a", 15432),
+            primary("proj:us-central1:b", 15433),
+        ];
+        let cfg = config(vec![dev]);
+        assert_eq!(
+            cfg.validate(),
+            Err(ValidationError::DuplicateRole {
+                profile: "dev".to_string(),
+                role: InstanceRole::Primary,
+            })
+        );
+    }
+
+    #[test]
+    fn validate_accepts_one_primary_and_one_replica() {
+        let cfg = config(vec![standard_profile("dev")]);
+        assert_eq!(cfg.validate(), Ok(()));
     }
 
     #[test]
