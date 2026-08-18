@@ -35,15 +35,19 @@ pub enum StartPlan {
 /// - Otherwise, any running profile whose ports overlap `target`'s must stop
 ///   first.
 ///
-/// The returned ids preserve the order of `running_ids` (not sorted), so
-/// callers get deterministic, predictable output.
+/// The returned ids preserve the order of `running_ids` (not sorted) and are
+/// deduplicated, so a repeated id cannot produce `StopThenStart(["dev",
+/// "dev"])` — which would render as "Stop dev, dev" and issue two stop calls
+/// for one process. Deduplicating last keeps first-occurrence ordering.
 pub fn plan_start(config: &ProfileConfig, target: &Profile, running_ids: &[String]) -> StartPlan {
+    let mut seen = std::collections::HashSet::new();
     let conflicts: Vec<String> = running_ids
         .iter()
         .filter(|id| id.as_str() != target.id.as_str())
         .filter_map(|id| config.profiles.iter().find(|p| &p.id == id))
         .filter(|running| ProfileConfig::ports_overlap(running, target))
         .map(|running| running.id.clone())
+        .filter(|id| seen.insert(id.clone()))
         .collect();
 
     if conflicts.is_empty() {
@@ -178,6 +182,31 @@ mod tests {
         cfg.profiles[2] = standard_profile("prd");
         let prd = cfg.profiles[2].clone();
         let running = ids(&["stg", "dev"]);
+        assert_eq!(
+            plan_start(&cfg, &prd, &running),
+            StartPlan::StopThenStart(vec!["stg".to_string(), "dev".to_string()])
+        );
+    }
+
+    #[test]
+    fn repeated_running_id_is_listed_once() {
+        // Without dedupe this returns ["dev", "dev"], which would render as
+        // "Stop dev, dev" and issue two stop calls for one process.
+        let cfg = standard_config();
+        let stg = cfg.profiles[1].clone();
+        let running = ids(&["dev", "dev"]);
+        assert_eq!(
+            plan_start(&cfg, &stg, &running),
+            StartPlan::StopThenStart(vec!["dev".to_string()])
+        );
+    }
+
+    #[test]
+    fn dedupe_keeps_first_occurrence_ordering() {
+        let mut cfg = standard_config();
+        cfg.profiles[2] = standard_profile("prd");
+        let prd = cfg.profiles[2].clone();
+        let running = ids(&["stg", "dev", "stg"]);
         assert_eq!(
             plan_start(&cfg, &prd, &running),
             StartPlan::StopThenStart(vec!["stg".to_string(), "dev".to_string()])

@@ -97,9 +97,19 @@ pub fn load_or_seed(path: &Path) -> Result<ProfileConfig, StoreError> {
 }
 
 /// Validate and persist `config` to `path`, creating parent directories if
-/// needed and writing atomically (write to a temp file, then rename onto the
-/// target) so a crash or power loss mid-write can never leave a truncated or
-/// corrupt config on disk.
+/// needed.
+///
+/// Writes to a temp file, flushes it to disk, then renames onto the target, so
+/// a crash mid-write leaves either the old config or the new one — never a
+/// truncated file. `rename` alone would only make the *swap* atomic to other
+/// processes; without the `sync_all` the rename can survive a power loss while
+/// the data blocks behind it do not.
+///
+/// The temp name carries the process id so two processes cannot interleave
+/// their writes into one temp file. That does NOT serialize concurrent saves
+/// within a process: callers must hold the config behind a mutex and save
+/// while holding the guard (Tauri commands run on a thread pool, so two IPC
+/// calls can otherwise overlap).
 pub fn save(path: &Path, config: &ProfileConfig) -> Result<(), StoreError> {
     config.validate()?;
 
@@ -109,8 +119,16 @@ pub fn save(path: &Path, config: &ProfileConfig) -> Result<(), StoreError> {
 
     let json = serde_json::to_string_pretty(config)?;
 
-    let tmp_path = path.with_extension("json.tmp");
-    std::fs::write(&tmp_path, json)?;
+    // Sibling of the target, so the rename stays within one filesystem.
+    let tmp_path = path.with_extension(format!("json.tmp.{}", std::process::id()));
+
+    {
+        use std::io::Write;
+        let mut file = std::fs::File::create(&tmp_path)?;
+        file.write_all(json.as_bytes())?;
+        file.sync_all()?;
+    }
+
     std::fs::rename(&tmp_path, path)?;
 
     Ok(())
@@ -224,8 +242,42 @@ mod tests {
         let path = dir.path().join("profiles.json");
         save(&path, &seed_profiles()).expect("save");
 
-        let tmp_path = path.with_extension("json.tmp");
-        assert!(!tmp_path.exists());
+        // Assert on the whole directory rather than one expected temp name:
+        // a name-specific check passes even when a differently-named temp
+        // file is leaked.
+        let mut names: Vec<String> = std::fs::read_dir(dir.path())
+            .expect("read_dir")
+            .map(|entry| {
+                entry
+                    .expect("entry")
+                    .file_name()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect();
+        names.sort();
+        assert_eq!(names, vec!["profiles.json".to_string()]);
+    }
+
+    #[test]
+    fn save_overwrites_existing_file_without_leaving_stale_bytes() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("profiles.json");
+
+        // First write the full three-environment config, then overwrite with a
+        // shorter one. A non-atomic write could leave trailing bytes of the
+        // longer JSON behind, producing invalid output.
+        save(&path, &seed_profiles()).expect("save long");
+        let long_len = std::fs::read(&path).expect("read long").len();
+
+        let mut short = seed_profiles();
+        short.profiles.truncate(1);
+        save(&path, &short).expect("save short");
+
+        let after = std::fs::read_to_string(&path).expect("read short");
+        assert!(after.len() < long_len, "expected a shorter file");
+        let reloaded: ProfileConfig = serde_json::from_str(&after).expect("valid JSON");
+        assert_eq!(reloaded, short);
     }
 
     #[test]

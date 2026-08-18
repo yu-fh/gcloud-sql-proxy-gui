@@ -94,6 +94,15 @@ pub fn parse_instances(output: &str) -> Result<Vec<DiscoveredInstance>, Discover
 /// returning only the differences. Instances whose role has no matching
 /// discovered instance are skipped (not an error) so partial discovery
 /// results don't block reconciliation of the roles that were found.
+///
+/// When discovery returns several instances with the same role — Cloud SQL
+/// permits more than one read replica per project — the first one gcloud
+/// listed wins, silently. Note the asymmetry with stored profiles, where
+/// `ProfileConfig::validate` rejects a duplicate role outright
+/// (`ValidationError::DuplicateRole`) precisely because role matching would be
+/// ambiguous. If multi-replica projects become real here, surface both
+/// candidates so the confirmation step can show the choice instead of
+/// resolving it invisibly.
 pub fn reconcile(profile: &Profile, discovered: &[DiscoveredInstance]) -> Vec<Change> {
     let mut changes = Vec::new();
 
