@@ -57,7 +57,7 @@ Webview window (opened on demand only)
   Profiles editor, log viewer
 ```
 
-Tauri is a good fit for a menu bar utility: `TrayIconBuilder` provides the native menu and `ActivationPolicy::Accessory` removes the Dock icon and app-switcher entry.
+Tauri is a good fit for a menu bar utility: `TrayIconBuilder` provides the native menu, and the runtime call `app.set_activation_policy(ActivationPolicy::Accessory)` removes the Dock icon and app-switcher entry. That call is the only mechanism — Tauri 2.11 has no equivalent config field, so this cannot be set declaratively in `tauri.conf.json`.
 
 Child processes use `tokio::process` rather than `tauri-plugin-shell`. The plugin would work, but `tokio::process::Command` offers `kill_on_drop(true)` — which is the orphan guarantee that matters here, since a leaked child keeps holding port 15432 — and it lets `ProxyManager` be unit-tested without constructing a Tauri app or navigating the plugin's permission scoping.
 

@@ -140,7 +140,7 @@ fn main() {
 
 - [ ] **Step 8: Create `src-tauri/tauri.conf.json`**
 
-`dockVisibility: false` is what makes this a menu-bar-only app. `withGlobalTauri` lets the plain-JS frontend call commands without a bundler.
+The runtime call `app.set_activation_policy(ActivationPolicy::Accessory)` in Step 10 is what makes this a menu-bar-only app. There is no config field for it: `bundle.macOS.dockVisibility` and `bundle.macOS.activationPolicy` do **not** exist in Tauri 2.11's schema (verified against `tauri-utils` `config.rs` — neither name appears), and including either makes the build fail with `unknown field`. `withGlobalTauri` lets the plain-JS frontend call commands without a bundler.
 
 ```json
 {
