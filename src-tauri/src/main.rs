@@ -6,6 +6,7 @@
 
 mod app_state;
 mod commands;
+mod tray;
 
 use std::path::{Path, PathBuf};
 
@@ -30,6 +31,7 @@ fn main() {
     let manager = ProxyManager::new(proxy_binary());
     let shared = app_state::Shared::new(config, config_path.clone(), manager);
 
+    let shared_for_setup = shared.clone();
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
@@ -47,19 +49,20 @@ fn main() {
             commands::apply_changes,
             commands::read_logs,
         ])
-        .setup(move |_app| {
+        .setup(move |app| {
             // Menu-bar-only: no Dock icon, no app switcher entry. There is no
             // tauri.conf.json field for this, so it has to happen here.
             #[cfg(target_os = "macos")]
-            _app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
-            // Task 10 builds the tray menu here: `tray::build(_app, &shared)?;`
+            tray::build(app, &shared_for_setup)?;
 
             if let Some(message) = &load_error {
-                // With no tray and no window yet there is nowhere to render
-                // this, so stderr is the honest channel. Task 10/11 should
-                // surface it as a menu item or a dialog.
+                // stderr for the operator, and a dialog for the user: with no
+                // Dock icon and no window, a menu bar app that silently fell
+                // back to defaults gives no clue that it did.
                 eprintln!("{message}");
+                tray::report_startup_error(app.handle(), message);
             }
 
             Ok(())
