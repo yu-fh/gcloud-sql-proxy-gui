@@ -57,7 +57,9 @@ Webview window (opened on demand only)
   Profiles editor, log viewer
 ```
 
-Tauri is a good fit for a menu bar utility: `TrayIconBuilder` provides the native menu, `ActivationPolicy::Accessory` removes the Dock icon and app-switcher entry, and `tauri-plugin-shell` spawns children with a killable handle and a stdout/stderr event stream.
+Tauri is a good fit for a menu bar utility: `TrayIconBuilder` provides the native menu and `ActivationPolicy::Accessory` removes the Dock icon and app-switcher entry.
+
+Child processes use `tokio::process` rather than `tauri-plugin-shell`. The plugin would work, but `tokio::process::Command` offers `kill_on_drop(true)` — which is the orphan guarantee that matters here, since a leaked child keeps holding port 15432 — and it lets `ProxyManager` be unit-tested without constructing a Tauri app or navigating the plugin's permission scoping.
 
 ### Unit responsibilities
 
@@ -126,10 +128,10 @@ Default behavior: starting a profile while another is running prompts **"Stop de
 
 Opt-in concurrency: a profile may be assigned non-default ports (for example prd on 25432/25433). Profiles whose ports do not overlap run concurrently with no prompt. This makes the simultaneous dev-and-prd case possible without making divergent client configs the default.
 
-Port uniqueness is enforced in two places, because config-time validation alone cannot see processes outside the app:
+Port handling is split between config integrity and runtime availability, because sharing a port across profiles is intentional here while sharing one *within* a profile is always a bug:
 
-1. **Save time** — the profile editor rejects a port already claimed by another profile.
-2. **Start time** — a bind test immediately before spawn catches ports held by a stray terminal proxy, Postgres.app, or a previous leaked child. `address already in use` on stderr is also classified as a fallback.
+1. **Save time** — the profile editor rejects a duplicate port within a single profile (such a profile could never start). It permits the same port across different profiles, since that is exactly what exclusive-by-default means; the app instead records those profiles as mutually exclusive.
+2. **Start time** — a bind test immediately before spawn catches ports held by another profile, a stray terminal proxy, Postgres.app, or a previous leaked child. `address already in use` on stderr is also classified as a fallback.
 
 ## Failure diagnosis
 
