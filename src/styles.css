@@ -1,1 +1,399 @@
-body { font: 13px -apple-system, system-ui, sans-serif; margin: 0; padding: 12px; }
+/* This window sits next to native menu bar UI, so it uses the system font
+   stack and follows the system appearance rather than picking its own look.
+   Colours are defined once as custom properties and overridden wholesale in
+   the dark-scheme block. */
+
+:root {
+  --bg: #f5f5f7;
+  --card: #ffffff;
+  --text: #1d1d1f;
+  --muted: #6e6e73;
+  --border: #d2d2d7;
+  --field-bg: #ffffff;
+  --accent: #0071e3;
+  --accent-text: #ffffff;
+  --danger: #c9252d;
+  --danger-bg: #fdeded;
+  --hint-bg: #fff8e1;
+  --hint-border: #e6c200;
+  --running: #1d7d3f;
+  --running-bg: #e4f4e9;
+  --logs-bg: #ffffff;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1e1e1e;
+    --card: #2a2a2c;
+    --text: #f5f5f7;
+    --muted: #9a9a9f;
+    --border: #414146;
+    --field-bg: #1c1c1e;
+    --accent: #0a84ff;
+    --accent-text: #ffffff;
+    --danger: #ff6b6b;
+    --danger-bg: #3a1f21;
+    --hint-bg: #3a3320;
+    --hint-border: #7a6a20;
+    --running: #4ad46a;
+    --running-bg: #1f3324;
+    --logs-bg: #161618;
+    --shadow: none;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 0 14px 16px;
+  font:
+    13px/1.45 -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui,
+    sans-serif;
+  color: var(--text);
+  background: var(--bg);
+}
+
+h2 {
+  font-size: 14px;
+  margin: 0;
+}
+
+/* --- tabs ---------------------------------------------------------------- */
+
+/* Sticky so the view switcher stays reachable while a long profile list
+   scrolls. It needs an opaque background and a negative side margin that
+   re-covers the body padding, otherwise cards show through beside and beneath
+   it as they scroll under. */
+.tabs {
+  display: flex;
+  gap: 4px;
+  position: sticky;
+  top: 0;
+  margin: 0 -14px;
+  padding: 10px 14px 8px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  z-index: 2;
+}
+
+.tab {
+  padding: 4px 12px;
+  border-radius: 6px;
+  text-decoration: none;
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.tab:hover {
+  background: var(--card);
+}
+
+.tab.active {
+  background: var(--accent);
+  color: var(--accent-text);
+}
+
+/* --- shared -------------------------------------------------------------- */
+
+.banner {
+  margin: 10px 0 0;
+  padding: 9px 11px;
+  border: 1px solid var(--danger);
+  border-radius: 6px;
+  background: var(--danger-bg);
+  color: var(--danger);
+  /* Backend errors can be long and are the whole point of the banner. */
+  white-space: pre-wrap;
+}
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.note {
+  color: var(--muted);
+}
+
+.muted {
+  color: var(--muted);
+  margin: 2px 0 8px;
+}
+
+.empty {
+  color: var(--muted);
+}
+
+button {
+  font: inherit;
+  padding: 4px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--card);
+  color: var(--text);
+}
+
+button:hover {
+  border-color: var(--accent);
+}
+
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-text);
+}
+
+select {
+  font: inherit;
+  padding: 3px 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--field-bg);
+  color: var(--text);
+}
+
+/* --- profiles ------------------------------------------------------------ */
+
+.profile {
+  margin-bottom: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+  box-shadow: var(--shadow);
+}
+
+/* Production is one click from on; the left rule makes prd unmistakable at a
+   glance even before the badge is read. */
+.profile.danger {
+  border-left: 4px solid var(--danger);
+}
+
+.profile-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.profile-name {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.badge {
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 600;
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+
+.badge-running {
+  background: var(--running-bg);
+  border-color: var(--running);
+  color: var(--running);
+}
+
+.badge-failed {
+  background: var(--danger-bg);
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.badge-danger {
+  background: var(--danger-bg);
+  border-color: var(--danger);
+  color: var(--danger);
+  letter-spacing: 0.04em;
+}
+
+.failure {
+  margin-bottom: 10px;
+  padding: 9px 11px;
+  border: 1px solid var(--danger);
+  border-radius: 6px;
+  background: var(--danger-bg);
+}
+
+.failure-message {
+  margin: 0 0 8px;
+  color: var(--danger);
+}
+
+.fix-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.fix-command {
+  flex: 1 1 260px;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--field-bg);
+  color: var(--text);
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-size: 12px;
+  /* Long commands wrap rather than overflowing the card. */
+  overflow-wrap: anywhere;
+}
+
+/* The first-run state for every fresh install: a next step, not an error, so
+   it is styled as a notice rather than in the failure red. */
+.hint {
+  margin-bottom: 10px;
+  padding: 9px 11px;
+  border: 1px solid var(--hint-border);
+  border-left: 3px solid var(--hint-border);
+  border-radius: 6px;
+  background: var(--hint-bg);
+}
+
+.hint p {
+  margin: 4px 0 0;
+}
+
+.fields,
+.instance {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+.instance {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.role {
+  width: 90px;
+  padding-bottom: 5px;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex: 1 1 220px;
+}
+
+.field.wide {
+  flex: 3 1 320px;
+}
+
+.field.narrow {
+  flex: 0 0 90px;
+}
+
+.field-label {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+input {
+  font: inherit;
+  padding: 5px 7px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--field-bg);
+  color: var(--text);
+  width: 100%;
+}
+
+input:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+/* --- proposed changes ---------------------------------------------------- */
+
+.changes {
+  margin: 12px 0;
+  padding: 12px 14px;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  background: var(--card);
+}
+
+.change-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+/* from -> to on one row, with the connection names monospaced so the changed
+   Terraform suffix is easy to spot. */
+.change {
+  display: grid;
+  grid-template-columns: 120px 1fr auto 1fr;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  border-top: 1px solid var(--border);
+}
+
+.change-where {
+  font-weight: 600;
+}
+
+.change-from,
+.change-to,
+.change-arrow {
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.change-from {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+.change-to {
+  color: var(--running);
+}
+
+/* Narrow window: stack the diff instead of squeezing four columns. */
+@media (max-width: 720px) {
+  .change {
+    grid-template-columns: 1fr;
+  }
+
+  .change-arrow {
+    display: none;
+  }
+}
+
+/* --- logs ---------------------------------------------------------------- */
+
+.logs {
+  margin: 0;
+  padding: 10px 12px;
+  height: calc(100vh - 130px);
+  min-height: 180px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--logs-bg);
+  color: var(--text);
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

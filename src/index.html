@@ -1,5 +1,52 @@
 <!doctype html>
-<html>
-  <head><meta charset="utf-8" /><title>Cloud SQL Proxy</title></head>
-  <body><div id="app">Loading…</div><script type="module" src="/profiles.js"></script></body>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Cloud SQL Proxy</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <!-- Both windows load this same page; the tray opens `logs` at
+         index.html#logs, and profiles.js picks the view from the hash. -->
+    <nav class="tabs" aria-label="Views">
+      <a class="tab" id="tab-profiles" href="#profiles">Profiles</a>
+      <a class="tab" id="tab-logs" href="#logs">Logs</a>
+    </nav>
+
+    <!-- Errors from any invoke land here, above both views, so a failure is
+         never only in the console. -->
+    <div id="banner" class="banner" role="alert" hidden></div>
+
+    <main>
+      <section id="view-profiles" class="view">
+        <div class="toolbar">
+          <button id="btn-refresh" type="button">Refresh connection names</button>
+          <button id="btn-save" type="button" class="primary">Save</button>
+          <button id="btn-reload" type="button">Reload</button>
+          <span id="save-note" class="note" aria-live="polite"></span>
+        </div>
+
+        <!-- Populated by renderChanges() when refresh_connection_names returns
+             proposals. Nothing is written until Apply is clicked. -->
+        <div id="changes" class="changes" hidden></div>
+
+        <div id="profiles" class="profiles">Loading…</div>
+      </section>
+
+      <section id="view-logs" class="view" hidden>
+        <div class="toolbar">
+          <label for="log-filter">Profile</label>
+          <select id="log-filter">
+            <option value="">All profiles</option>
+          </select>
+          <button id="btn-logs-refresh" type="button">Refresh</button>
+          <span id="log-note" class="note" aria-live="polite"></span>
+        </div>
+        <pre id="logs" class="logs">Loading…</pre>
+      </section>
+    </main>
+
+    <script type="module" src="/profiles.js"></script>
+  </body>
 </html>
