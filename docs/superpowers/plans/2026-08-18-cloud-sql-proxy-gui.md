@@ -671,13 +671,12 @@ mod tests {
     }
 
     #[test]
-    fn seed_config_fails_validation_only_on_duplicate_ports() {
-        // All three seeded profiles share 15432/15433 by design (exclusive
-        // by default), so the seeded set intentionally does NOT pass the
-        // global uniqueness check. Validation is for user-authored configs
-        // where concurrency is requested.
+    fn seeded_config_is_valid_and_all_profiles_conflict() {
+        // Exclusive by default: the three environments share 15432/15433,
+        // so the config is valid but no two can run together.
         let config = seed_profiles();
-        assert!(config.validate().is_err());
+        assert_eq!(config.validate(), Ok(()));
+        assert_eq!(config.conflicting_ports().len(), 6); // 3 pairs x 2 ports
     }
 
     #[test]
@@ -735,131 +734,14 @@ mod tests {
 }
 ```
 
-Note the deliberate design point captured in `seed_config_fails_validation_only_on_duplicate_ports`: the seeded three-environment config shares ports because exclusive-by-default is the intent. Therefore `load_or_seed` must **not** call `validate()` on the seeded value it writes. Verify the code above does not — `save()` does call validate, so this is a real conflict.
+Note on validation: `validate()` intentionally permits the same port across different profiles — that shared-port state is exactly what exclusive-by-default means, and the seeded config relies on it. Task 2 already implemented this split (`validate()` checks integrity and within-profile port uniqueness; `conflicting_ports()` reports cross-profile sharing as a concurrency fact). Do **not** modify `profile.rs` in this task; `save()` calling `validate()` is correct as written.
 
-- [ ] **Step 3: Resolve the seed/validate conflict**
-
-Split validation: global port uniqueness is a *concurrency* property, not a config-integrity property. Replace `validate` usage so `save` only checks integrity.
-
-In `src-tauri/src/core/profile.rs`, split the method — replace the `validate` method with these two:
-
-```rust
-    /// Integrity checks that must hold for any config: schema version,
-    /// unique ids, non-empty instances, and no duplicate port *within*
-    /// a single profile (which could never start).
-    pub fn validate(&self) -> Result<(), ValidationError> {
-        if self.version != CURRENT_SCHEMA_VERSION {
-            return Err(ValidationError::UnsupportedVersion {
-                found: self.version,
-                expected: CURRENT_SCHEMA_VERSION,
-            });
-        }
-
-        let mut seen_ids: Vec<&str> = Vec::new();
-        for p in &self.profiles {
-            if p.instances.is_empty() {
-                return Err(ValidationError::NoInstances(p.id.clone()));
-            }
-            if seen_ids.contains(&p.id.as_str()) {
-                return Err(ValidationError::DuplicateId(p.id.clone()));
-            }
-            seen_ids.push(&p.id);
-
-            let mut ports = p.ports();
-            ports.sort_unstable();
-            let before = ports.len();
-            ports.dedup();
-            if ports.len() != before {
-                let dup = p
-                    .ports()
-                    .iter()
-                    .find(|port| p.ports().iter().filter(|q| *q == *port).count() > 1)
-                    .copied()
-                    .unwrap_or_default();
-                return Err(ValidationError::DuplicatePort {
-                    port: dup,
-                    first: p.id.clone(),
-                    second: p.id.clone(),
-                });
-            }
-        }
-        Ok(())
-    }
-
-    /// Which profiles could never run at the same time because they
-    /// share a port. Used to decide whether starting one must stop another.
-    pub fn conflicting_ports(&self) -> Vec<(String, String, u16)> {
-        let mut conflicts = Vec::new();
-        for (i, a) in self.profiles.iter().enumerate() {
-            for b in self.profiles.iter().skip(i + 1) {
-                for port in a.ports() {
-                    if b.ports().contains(&port) {
-                        conflicts.push((a.id.clone(), b.id.clone(), port));
-                    }
-                }
-            }
-        }
-        conflicts
-    }
-```
-
-- [ ] **Step 4: Update the profile tests for the split**
-
-In `src-tauri/src/core/profile.rs`, replace `validate_rejects_duplicate_port_across_profiles` with:
-
-```rust
-    #[test]
-    fn validate_allows_duplicate_ports_across_profiles() {
-        // Sharing 15432 across environments is the documented default;
-        // it means they cannot run concurrently, not that the config is invalid.
-        let config = ProfileConfig {
-            version: 1,
-            profiles: vec![profile("dev", [15432, 15433]), profile("prd", [15432, 15433])],
-        };
-        assert_eq!(config.validate(), Ok(()));
-    }
-
-    #[test]
-    fn conflicting_ports_lists_shared_ports_between_profiles() {
-        let config = ProfileConfig {
-            version: 1,
-            profiles: vec![profile("dev", [15432, 15433]), profile("prd", [15432, 25433])],
-        };
-        assert_eq!(
-            config.conflicting_ports(),
-            vec![("dev".to_string(), "prd".to_string(), 15432)]
-        );
-    }
-
-    #[test]
-    fn conflicting_ports_empty_when_offsets_differ() {
-        let config = ProfileConfig {
-            version: 1,
-            profiles: vec![profile("dev", [15432, 15433]), profile("prd", [25432, 25433])],
-        };
-        assert!(config.conflicting_ports().is_empty());
-    }
-```
-
-Also update `validate_accepts_distinct_ports` to keep passing (it still should) and change `seed_config_fails_validation_only_on_duplicate_ports` in `store.rs` to:
-
-```rust
-    #[test]
-    fn seeded_config_is_valid_and_all_profiles_conflict() {
-        // Exclusive by default: the three environments share 15432/15433,
-        // so the config is valid but no two can run together.
-        let config = seed_profiles();
-        assert_eq!(config.validate(), Ok(()));
-        assert_eq!(config.conflicting_ports().len(), 6); // 3 pairs x 2 ports
-    }
-```
-
-- [ ] **Step 5: Run the tests**
+- [ ] **Step 3: Run the tests**
 
 Run: `cd src-tauri && cargo test core::`
 Expected: all profile and store tests pass.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
 git add -A
