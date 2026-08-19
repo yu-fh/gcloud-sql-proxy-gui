@@ -1,8 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Permissions for the profile editor and log viewer windows",
-  "windows": ["profiles", "logs"],
+  "description": "Permissions for the settings window (Profiles and Logs)",
+  "windows": ["settings"],
   "permissions": [
     "core:default",
     "autostart:default",

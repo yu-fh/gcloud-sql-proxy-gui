@@ -1,14 +1,18 @@
-// Profile editor and log viewer for the two secondary windows.
+// Profile editor and log viewer, in one window with a sidebar.
 //
-// The tray menu is the primary UI and handles start/stop; this page exists for
-// the two things a native menu cannot do: editing a form and reading a log
-// buffer. One page serves both windows -- the tray opens `logs` at
-// `index.html#logs` -- so the hash selects the view.
+// The tray menu is the primary UI and handles start/stop; this window exists
+// for the two things a native menu cannot do: editing a form and reading a log
+// buffer. Those used to be two separate native windows, which meant two
+// entries in Mission Control both titled "Cloud SQL Proxy" -- reading as two
+// apps rather than one settings panel. They are now two sections of one window,
+// selected from a source list on the left, which is how System Settings does
+// it. The hash still names the section (`index.html#logs`), so the tray can
+// deep-link straight to Logs and the selection survives a reload.
 //
 // The layout deliberately mirrors macOS System Settings rather than a web
-// form: a grouped source list of environments at the top, a grouped detail
-// list for the selected one below, and the window's actions in a footer. There
-// is no in-page tab bar; each window shows exactly one view, chosen by hash.
+// form: a sidebar of sections, then a grouped source list of environments, a
+// grouped detail list for the selected one, and the window's actions in a
+// footer. No web tab bar anywhere.
 //
 // No bundler and no framework: `withGlobalTauri` puts `invoke` on the window,
 // the CSP is `default-src 'self'`, and everything here is plain ES module code
@@ -109,38 +113,91 @@ function note(id, text) {
 }
 
 // ---------------------------------------------------------------------------
-// Views
+// Sections and the sidebar
 //
-// Two windows, two views, selected purely by `location.hash`. A web-style tab
-// bar was removed deliberately: each window already has exactly one job, and a
-// tab strip inside a settings window is the single most web-looking thing a
-// native panel can have.
+// One window, two sections, selected from the sidebar. A web-style tab bar was
+// considered and rejected: a tab strip inside a settings window is the single
+// most web-looking thing a native panel can have. A macOS settings window is
+// one window with a source list, so that is what this is.
+//
+// The hash remains the source of truth for which section is showing. It is the
+// one channel the tray has -- `WebviewUrl::App("index.html#logs")` on first
+// open, and a JS eval of `location.hash` afterwards -- and it survives a
+// reload, so the window reopens where it was left.
 // ---------------------------------------------------------------------------
+
+/// The sections, in sidebar order. Arrow keys walk this list.
+const SECTIONS = ['profiles', 'logs'];
 
 function currentView() {
   return window.location.hash === '#logs' ? 'logs' : 'profiles';
 }
 
-/// Swap views to match the hash. Both windows load the same document, so this
-/// runs on load and on every hashchange.
+/// Swap the visible section to match the hash and move the sidebar selection
+/// with it. Runs on load and on every hashchange, so clicking a sidebar row
+/// (which only sets the hash) and the tray deep-linking both land here.
 function applyView() {
   const view = currentView();
   const isLogs = view === 'logs';
 
   $('view-profiles').hidden = isLogs;
   $('view-logs').hidden = !isLogs;
-  // The footer's actions all belong to the profile editor; the logs view has
+  // The footer's actions all belong to the profile editor; the logs section has
   // its own Refresh in its own bar.
   $('footer').hidden = isLogs;
   document.body.classList.toggle('logs-view', isLogs);
 
-  const title = isLogs ? 'Logs' : 'Profiles';
-  document.title = title;
-  $('window-title').textContent = title;
+  SECTIONS.forEach((section) => {
+    const row = $(`nav-${section}`);
+    const selected = section === view;
+    row.classList.toggle('selected', selected);
+    row.setAttribute('aria-selected', String(selected));
+    // Only the selected row is in the tab order, as a native source list does:
+    // Tab reaches the list, arrows move within it.
+    row.tabIndex = selected ? 0 : -1;
+  });
 
-  // Logs are a snapshot, not a stream: load them whenever the view is entered
-  // so re-showing the window always renders current output.
+  // The window keeps one title -- it is one window now -- so the strip names
+  // the app rather than the section the sidebar already names.
+  document.title = 'Cloud SQL Proxy';
+
+  // Logs are a snapshot, not a stream: load them whenever the section is
+  // entered so re-showing the window always renders current output.
   if (isLogs) loadLogs();
+}
+
+/// Select a section. Writing the hash is the whole implementation: the
+/// hashchange handler does the work, so every route in (sidebar click, arrow
+/// key, tray deep link, reload) goes through exactly one code path.
+function showSection(section) {
+  const next = section === 'logs' ? '#logs' : '#profiles';
+  if (window.location.hash === next) {
+    // Same section: nothing to change, but a reload of the logs is still the
+    // right response to clicking Logs while already on Logs.
+    if (section === 'logs') loadLogs();
+    return;
+  }
+  window.location.hash = next;
+}
+
+/// Up/down move the sidebar selection, Home/End jump to the ends. The row is
+/// a real button, so Space and Return already activate it.
+function onSidebarKey(event) {
+  const index = SECTIONS.indexOf(currentView());
+  let next = null;
+
+  if (event.key === 'ArrowDown') next = SECTIONS[index + 1];
+  else if (event.key === 'ArrowUp') next = SECTIONS[index - 1];
+  else if (event.key === 'Home') next = SECTIONS[0];
+  else if (event.key === 'End') next = SECTIONS[SECTIONS.length - 1];
+  else return;
+
+  event.preventDefault();
+  if (!next) return;
+  showSection(next);
+  // The selection moved, so focus follows it -- otherwise the next arrow key
+  // would be measured from a row that is no longer selected.
+  $(`nav-${next}`).focus();
 }
 
 // ---------------------------------------------------------------------------
@@ -1007,6 +1064,12 @@ $('btn-logs-refresh').addEventListener('click', loadLogs);
 $('log-filter').addEventListener('change', loadLogs);
 window.addEventListener('hashchange', applyView);
 
+SECTIONS.forEach((section) => {
+  const row = $(`nav-${section}`);
+  row.addEventListener('click', () => showSection(section));
+  row.addEventListener('keydown', onSidebarKey);
+});
+
 // --- native window keyboard ------------------------------------------------
 //
 // The app has no menu bar of its own (ActivationPolicy::Accessory, so no
@@ -1098,6 +1161,6 @@ document.addEventListener('contextmenu', (event) => {
 });
 
 applyView();
-// Both views need the profile list: the logs window uses it for the filter
-// dropdown, so load it regardless of which view is showing.
+// Both sections need the profile list: the logs filter dropdown is built from
+// it, so load it regardless of which section is showing.
 loadProfiles();

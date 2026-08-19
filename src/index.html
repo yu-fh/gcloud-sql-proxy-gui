@@ -7,87 +7,184 @@
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
-    <!-- Both windows load this same document. The tray opens the logs window at
-         index.html#logs, and the hash alone selects the view: two windows, two
-         views, no in-page switcher. See applyView() in profiles.js. -->
+    <!-- One window, two sections, chosen from the sidebar. Two separate native
+         windows both titled "Cloud SQL Proxy" showed up twice in Mission
+         Control and read as two apps; a macOS settings window is one window
+         with a source list on the left. The hash still selects the section, so
+         the tray can deep-link straight to Logs. -->
 
     <!-- The title bar is an Overlay, so the OS traffic lights float above this
          strip and the page has to supply both the clearance and the drag
          region a real title bar would give it. -->
     <header class="titlebar">
-      <h1 id="window-title" class="titlebar-title">Profiles</h1>
+      <h1 id="window-title" class="titlebar-title">Cloud SQL Proxy</h1>
     </header>
 
-    <!-- Errors from any invoke land here, above the content of either view, so
-         a failure is never only in the console. -->
-    <div id="banner" class="banner" role="alert" hidden></div>
-
-    <main class="content">
-      <section id="view-profiles" class="view">
-        <!-- Source list: one row per environment, selection drives the detail
-             group below. Populated by renderEnvList(). -->
-        <h2 class="group-label" id="env-label">Environments</h2>
-        <div
-          id="env-list"
-          class="group group-list"
-          role="listbox"
-          aria-labelledby="env-label"
-        ></div>
-
-        <!-- The macOS source-list convention: small joined +/- buttons at the
-             bottom-left of the group they act on. -->
-        <div class="list-controls">
-          <button
-            id="btn-add"
-            type="button"
-            class="gutter-button"
-            title="Add an environment"
-            aria-label="Add an environment"
+    <div class="shell">
+      <!-- The source list. An AppKit sidebar, not a web nav: a rounded
+           selection pill in the accent colour, 28px rows, 13px type, and the
+           sidebar material tone with a hairline against the content pane. -->
+      <nav
+        id="sidebar"
+        class="sidebar"
+        role="tablist"
+        aria-label="Sections"
+        aria-orientation="vertical"
+      >
+        <button
+          id="nav-profiles"
+          type="button"
+          class="sidebar-row selected"
+          role="tab"
+          data-section="profiles"
+          aria-selected="true"
+          aria-controls="view-profiles"
+        >
+          <svg
+            class="sidebar-glyph"
+            viewBox="0 0 16 16"
+            aria-hidden="true"
+            focusable="false"
           >
-            +
-          </button>
-          <button
-            id="btn-delete"
-            type="button"
-            class="gutter-button"
-            title="Delete the selected environment"
-            aria-label="Delete the selected environment"
+            <!-- A stack of two records: the environment list. -->
+            <rect
+              x="2.25"
+              y="3.25"
+              width="11.5"
+              height="4"
+              rx="1.25"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.2"
+            />
+            <rect
+              x="2.25"
+              y="8.75"
+              width="11.5"
+              height="4"
+              rx="1.25"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.2"
+            />
+          </svg>
+          <span class="sidebar-label">Profiles</span>
+        </button>
+        <button
+          id="nav-logs"
+          type="button"
+          class="sidebar-row"
+          role="tab"
+          data-section="logs"
+          aria-selected="false"
+          aria-controls="view-logs"
+          tabindex="-1"
+        >
+          <svg
+            class="sidebar-glyph"
+            viewBox="0 0 16 16"
+            aria-hidden="true"
+            focusable="false"
           >
-            −
-          </button>
-        </div>
+            <!-- Three lines of text: the log buffer. -->
+            <path
+              d="M3 4.5h10M3 8h10M3 11.5h6.5"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.2"
+              stroke-linecap="round"
+            />
+          </svg>
+          <span class="sidebar-label">Logs</span>
+        </button>
+      </nav>
 
-        <!-- Detail for the selected environment: status, first-run hint,
-             failure text, and the editable fields. Built by renderDetail(). -->
-        <h2 class="group-label" id="detail-label">Settings</h2>
-        <div id="detail" class="detail" aria-labelledby="detail-label"></div>
+      <div class="pane">
+        <!-- Errors from any invoke land here, above the content of either
+             section, so a failure is never only in the console. -->
+        <div id="banner" class="banner" role="alert" hidden></div>
 
-        <!-- The refresh diff. refresh_connection_names() writes nothing; this
-             shows what it proposes and only Apply commits it. -->
-        <div id="changes" class="changes" hidden></div>
-      </section>
+        <main class="content">
+          <section
+            id="view-profiles"
+            class="view"
+            role="tabpanel"
+            aria-labelledby="nav-profiles"
+          >
+            <!-- Source list: one row per environment, selection drives the
+                 detail group below. Populated by renderEnvList(). -->
+            <h2 class="group-label" id="env-label">Environments</h2>
+            <div
+              id="env-list"
+              class="group group-list"
+              role="listbox"
+              aria-labelledby="env-label"
+            ></div>
 
-      <section id="view-logs" class="view" hidden>
-        <div class="logs-bar">
-          <label class="logs-bar-label" for="log-filter">Profile</label>
-          <select id="log-filter"></select>
-          <span id="log-note" class="note" aria-live="polite"></span>
-          <button id="btn-logs-refresh" type="button" class="push">
-            Refresh
-          </button>
-        </div>
-        <pre id="logs" class="logs">Loading…</pre>
-      </section>
-    </main>
+            <!-- The macOS source-list convention: small joined +/- buttons at
+                 the bottom-left of the group they act on. -->
+            <div class="list-controls">
+              <button
+                id="btn-add"
+                type="button"
+                class="gutter-button"
+                title="Add an environment"
+                aria-label="Add an environment"
+              >
+                +
+              </button>
+              <button
+                id="btn-delete"
+                type="button"
+                class="gutter-button"
+                title="Delete the selected environment"
+                aria-label="Delete the selected environment"
+              >
+                −
+              </button>
+            </div>
 
-    <!-- Window-footer actions, as a native settings sheet has them: secondary
-         on the left, default button on the right. Hidden in the logs view. -->
-    <footer id="footer" class="footer">
-      <span id="save-note" class="note" aria-live="polite"></span>
-      <button id="btn-reload" type="button">Revert</button>
-      <button id="btn-refresh" type="button">Refresh Connection Names</button>
-      <button id="btn-save" type="button" class="default">Done</button>
-    </footer>
+            <!-- Detail for the selected environment: status, first-run hint,
+                 failure text, and the editable fields. Built by
+                 renderDetail(). -->
+            <h2 class="group-label" id="detail-label">Settings</h2>
+            <div id="detail" class="detail" aria-labelledby="detail-label"></div>
+
+            <!-- The refresh diff. refresh_connection_names() writes nothing;
+                 this shows what it proposes and only Apply commits it. -->
+            <div id="changes" class="changes" hidden></div>
+          </section>
+
+          <section
+            id="view-logs"
+            class="view"
+            role="tabpanel"
+            aria-labelledby="nav-logs"
+            hidden
+          >
+            <div class="logs-bar">
+              <label class="logs-bar-label" for="log-filter">Profile</label>
+              <select id="log-filter"></select>
+              <span id="log-note" class="note" aria-live="polite"></span>
+              <button id="btn-logs-refresh" type="button" class="push">
+                Refresh
+              </button>
+            </div>
+            <pre id="logs" class="logs">Loading…</pre>
+          </section>
+        </main>
+
+        <!-- Window-footer actions, as a native settings sheet has them:
+             secondary on the left, default button on the right. Hidden in the
+             logs section. -->
+        <footer id="footer" class="footer">
+          <span id="save-note" class="note" aria-live="polite"></span>
+          <button id="btn-reload" type="button">Revert</button>
+          <button id="btn-refresh" type="button">Refresh Connection Names</button>
+          <button id="btn-save" type="button" class="default">Done</button>
+        </footer>
+      </div>
+    </div>
 
     <script type="module" src="/profiles.js"></script>
   </body>

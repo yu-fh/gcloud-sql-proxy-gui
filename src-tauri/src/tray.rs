@@ -2,8 +2,9 @@
 //!
 //! A native `NSMenu` hanging off the tray icon lists every profile with its
 //! ports and live status; clicking one toggles it. Richer interactions
-//! (`Profiles…`, `Logs…`) open real webview windows rather than cramming an
-//! editor into a popover.
+//! (`Profiles…`, `Logs…`) open a real webview window rather than cramming an
+//! editor into a popover — one window with a sidebar, two sections, as a macOS
+//! settings window is.
 //!
 //! # No duplicated policy
 //!
@@ -47,7 +48,7 @@
 //! only thing that knows a tray exists.
 //!
 //! The same poll carries profile *set* changes, which arrive by the same route
-//! — the Profiles window writes the config through the command layer, and the
+//! — the settings window writes the config through the command layer, and the
 //! core has no way to announce it. Each tick compares the ids the current menu
 //! was built from against the snapshot's, and rebuilds the menu only when they
 //! differ. Rebuilding unconditionally would flicker the menu once a second for
@@ -87,12 +88,27 @@ const PROFILE_PREFIX: &str = "profile:";
 /// correct a checkbox the OS already flipped.
 const TRAY_ID: &str = "main";
 
-/// Window labels. These two are the only labels the ACL in
-/// `capabilities/default.json` grants plugin permissions to, so they must
-/// match it exactly — a window under any other label gets no plugin access
-/// and its JS would fail at runtime rather than at build time.
-const WINDOW_PROFILES: &str = "profiles";
-const WINDOW_LOGS: &str = "logs";
+/// The one window label. It is the only label the ACL in
+/// `capabilities/default.json` grants plugin permissions to, so it must match
+/// that file exactly — a window under any other label gets no plugin access and
+/// its JS fails at runtime rather than at build time.
+///
+/// There used to be two windows, `profiles` and `logs`, both loading
+/// `index.html` with the hash choosing the view. Two windows both titled "Cloud
+/// SQL Proxy" appeared twice in Mission Control and read as two apps rather
+/// than one settings panel, so they are now two sections of one window with a
+/// source list on the left — which is what a macOS settings window is.
+const WINDOW_SETTINGS: &str = "settings";
+
+/// The window's title. One window, one label: the sidebar names the section, so
+/// the title bar names the app.
+const WINDOW_TITLE: &str = "Cloud SQL Proxy";
+
+/// Default size. Wider than the old profiles window because the logs pane wants
+/// width, and tall enough for the profile form's full height plus the footer;
+/// the sidebar adds its own width on top of the old content width.
+const WINDOW_WIDTH: f64 = 900.0;
+const WINDOW_HEIGHT: f64 = 600.0;
 
 /// One profile's rendering inputs, cloned out from behind the locks.
 struct ProfileRow {
@@ -354,7 +370,7 @@ fn profile_ids(snapshot: &Snapshot) -> Vec<String> {
 /// the menu when — and only when — the ids it was built from stop matching the
 /// snapshot. A status change, which happens on every start, is still an
 /// in-place `set_text`/`set_checked` on the existing items, so the common case
-/// does not flicker; a profile added or deleted in the Profiles window is rare
+/// does not flicker; a profile added or deleted in the settings window is rare
 /// and deliberate, and pays for a rebuild. Rebuilding unconditionally once a
 /// second would be the flickering trade; rebuilding on change is not.
 pub fn build<R: Runtime>(app: &tauri::App<R>, state: &SharedState) -> tauri::Result<()> {
@@ -587,15 +603,8 @@ async fn handle_menu_event<R: Runtime>(
             // leak a proxy holding 15432.
             app.exit(0);
         }
-        ID_PROFILES => open_window(
-            &app,
-            WINDOW_PROFILES,
-            "Profiles",
-            "index.html",
-            760.0,
-            560.0,
-        ),
-        ID_LOGS => open_window(&app, WINDOW_LOGS, "Logs", "index.html#logs", 900.0, 600.0),
+        ID_PROFILES => open_settings(&app, Section::Profiles),
+        ID_LOGS => open_settings(&app, Section::Logs),
         ID_REFRESH => refresh_connection_names(&app).await,
         ID_AUTOSTART => toggle_autostart(&app, &autostart_item),
         ID_STATUS => {}
@@ -790,8 +799,14 @@ struct WindowGeometry {
 /// job, but it pulls in a dependency tree and has to be registered in
 /// `main.rs`, and what it buys over ~40 lines here is machinery this app does
 /// not need: it tracks maximised/fullscreen/visibility for every window in the
-/// app, where this one has two windows that are only ever plain and resizable.
-/// A sidecar file keeps the whole feature inside the window code that owns it.
+/// app, where this one has a single window that is only ever plain and
+/// resizable. A sidecar file keeps the whole feature inside the window code that
+/// owns it.
+///
+/// The file is still keyed by label rather than holding one bare geometry: it
+/// already has entries under `profiles` and `logs` on every machine that ran an
+/// earlier build, and a map means those are simply ignored rather than
+/// misparsed.
 fn window_state_path() -> Option<PathBuf> {
     dirs::config_dir().map(|dir| {
         dir.join("fh-cloud-sql-proxy-gui")
@@ -809,8 +824,8 @@ fn load_window_state() -> HashMap<String, WindowGeometry> {
         .unwrap_or_default()
 }
 
-/// Persist one window's geometry, merging into whatever is already stored so
-/// the two windows do not overwrite each other.
+/// Persist one window's geometry, merging into whatever is already stored so a
+/// write does not discard entries under other labels.
 ///
 /// Errors are swallowed on purpose: failing to remember a window position is
 /// not worth a modal, and the next launch just uses the default.
@@ -857,41 +872,70 @@ fn position_is_visible<R: Runtime>(app: &AppHandle<R>, geometry: &WindowGeometry
     })
 }
 
-/// Show a webview window, creating it on first use.
+/// Which section of the settings window a tray item opens.
 ///
-/// A window is created lazily rather than at launch so the app costs nothing
+/// The page reads `location.hash` to decide, so the enum's whole job is to name
+/// the fragment in one place rather than spelling `"#logs"` at each call site.
+#[derive(Clone, Copy)]
+enum Section {
+    Profiles,
+    Logs,
+}
+
+impl Section {
+    /// The URL fragment, without the `#`.
+    fn hash(self) -> &'static str {
+        match self {
+            Section::Profiles => "profiles",
+            Section::Logs => "logs",
+        }
+    }
+}
+
+/// Show the settings window on the given section, creating it on first use.
+///
+/// The window is created lazily rather than at launch so the app costs nothing
 /// until asked, and reused rather than duplicated afterwards: `build` with an
-/// existing label fails, and two "Profiles" windows editing the same config
-/// would be a way to lose edits.
-fn open_window<R: Runtime>(
-    app: &AppHandle<R>,
-    label: &str,
-    title: &str,
-    url: &str,
-    width: f64,
-    height: f64,
-) {
-    if let Some(window) = app.get_webview_window(label) {
+/// existing label fails, and two windows editing the same config would be a way
+/// to lose edits.
+///
+/// `Profiles…` and `Logs…` both land here. When the window already exists the
+/// section is switched by writing `location.hash` from Rust — the page's
+/// `hashchange` handler does the rest, so a tray click and a sidebar click take
+/// exactly the same path through the JS.
+fn open_settings<R: Runtime>(app: &AppHandle<R>, section: Section) {
+    if let Some(window) = app.get_webview_window(WINDOW_SETTINGS) {
+        // Set the section before showing, so the window never appears on the
+        // wrong one and then flips.
+        //
+        // The hash is a fixed string from `Section::hash`, never user input, so
+        // there is nothing here to escape. An `eval` failure means the webview
+        // is gone, in which case showing it is the only useful thing left to
+        // try.
+        let _ = window.eval(format!("window.location.hash = '#{}';", section.hash()));
         let _ = window.show();
         let _ = window.unminimize();
         let _ = window.set_focus();
         return;
     }
 
-    let remembered = load_window_state().get(label).copied();
+    let remembered = load_window_state().get(WINDOW_SETTINGS).copied();
 
-    let mut builder = WebviewWindowBuilder::new(app, label, WebviewUrl::App(url.into()))
-        .title(title)
+    let url = format!("index.html#{}", section.hash());
+    let mut builder = WebviewWindowBuilder::new(app, WINDOW_SETTINGS, WebviewUrl::App(url.into()))
+        .title(WINDOW_TITLE)
         // A unified title bar, as native settings windows have: the page draws
         // under the traffic lights instead of below a separate bar. The page
         // pays for this with a header strip that supplies the clearance and
         // the drag region -- see `.titlebar` in styles.css.
         .title_bar_style(tauri::TitleBarStyle::Overlay)
         .resizable(true)
-        // Below this the footer's three buttons stop fitting on one line and
-        // the label/value rows collapse. A native window declares its minimum
-        // rather than letting the user drag it into an unusable shape.
-        .min_inner_size(420.0, 320.0);
+        // The old 420pt floor was for a window with no sidebar. The sidebar
+        // collapses to glyphs below 632pt (see the media query in styles.css),
+        // so the content pane keeps the same usable width it always had at this
+        // minimum. A native window declares its minimum rather than letting the
+        // user drag it into an unusable shape.
+        .min_inner_size(520.0, 360.0);
 
     // Restore size and position together: a remembered size at a default
     // position would put the window somewhere the user never left it.
@@ -901,7 +945,7 @@ fn open_window<R: Runtime>(
             .position(geometry.x, geometry.y),
         // No memory, or the screen it was on is gone: default size, and let
         // the OS place it.
-        _ => builder.inner_size(width, height).center(),
+        _ => builder.inner_size(WINDOW_WIDTH, WINDOW_HEIGHT).center(),
     };
 
     match builder.build() {
@@ -911,9 +955,13 @@ fn open_window<R: Runtime>(
             // was in. Focusing it explicitly is what makes the click feel
             // like it did something.
             let _ = window.set_focus();
-            remember_geometry_on_close(&window, label.to_string());
+            remember_geometry_on_close(&window, WINDOW_SETTINGS.to_string());
         }
-        Err(error) => report_error(app, &format!("Could not open {title}"), &error.to_string()),
+        Err(error) => report_error(
+            app,
+            &format!("Could not open {WINDOW_TITLE}"),
+            &error.to_string(),
+        ),
     }
 }
 
@@ -1288,10 +1336,36 @@ mod tests {
     }
 
     #[test]
-    fn window_labels_match_the_acl() {
-        // `capabilities/default.json` grants plugin permissions to exactly
-        // these two labels; a typo here means a window with no plugin access.
-        assert_eq!(WINDOW_PROFILES, "profiles");
-        assert_eq!(WINDOW_LOGS, "logs");
+    fn window_label_matches_the_acl() {
+        // `capabilities/default.json` grants plugin permissions to exactly this
+        // one label; a typo here means a window with no plugin access, which
+        // fails at runtime rather than at build time.
+        assert_eq!(WINDOW_SETTINGS, "settings");
+    }
+
+    #[test]
+    fn the_acl_file_actually_lists_the_window_label() {
+        // The assertion above only pins the constant. This one reads the ACL
+        // itself, so renaming the label without editing the capability file is
+        // a test failure rather than a window whose `invoke` calls are silently
+        // denied.
+        let acl = include_str!("../capabilities/default.json");
+        let listed: serde_json::Value = serde_json::from_str(acl).expect("capability file is JSON");
+        let windows = listed["windows"]
+            .as_array()
+            .expect("capability file lists windows");
+        assert!(
+            windows.iter().any(|w| w == WINDOW_SETTINGS),
+            "capabilities/default.json does not grant permissions to \
+             '{WINDOW_SETTINGS}'; it lists {windows:?}"
+        );
+    }
+
+    #[test]
+    fn each_section_names_its_hash() {
+        // The page dispatches on `location.hash`, so these strings are a
+        // contract with applyView() in profiles.js.
+        assert_eq!(Section::Profiles.hash(), "profiles");
+        assert_eq!(Section::Logs.hash(), "logs");
     }
 }

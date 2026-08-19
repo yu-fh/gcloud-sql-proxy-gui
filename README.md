@@ -160,7 +160,8 @@ verified rather than assumed.
 
 ## How it is built
 
-Tauri v2 — a Rust core with a small webview for the windows that need a form.
+Tauri v2 — a Rust core plus one small webview window, with a sidebar for the two
+things a menu cannot do: a form and a log buffer.
 
 The core (`src-tauri/src/core/`) has no Tauri dependency, so it tests
 standalone:
