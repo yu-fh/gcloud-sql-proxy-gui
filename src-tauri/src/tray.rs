@@ -45,6 +45,15 @@
 //! event channel through it, the tray re-reads the state once a second. One
 //! second is well under human notice for a status line and keeps the tray the
 //! only thing that knows a tray exists.
+//!
+//! The same poll carries profile *set* changes, which arrive by the same route
+//! — the Profiles window writes the config through the command layer, and the
+//! core has no way to announce it. Each tick compares the ids the current menu
+//! was built from against the snapshot's, and rebuilds the menu only when they
+//! differ. Rebuilding unconditionally would flicker the menu once a second for
+//! the sake of something that happens when a user adds a profile; rebuilding on
+//! change costs nothing in the common case and is the only way an added profile
+//! ever appears or a deleted one ever goes away.
 
 use std::time::Duration;
 
@@ -200,30 +209,42 @@ async fn snapshot(state: &SharedState) -> Snapshot {
     Snapshot { rows }
 }
 
-/// Build the tray icon, its menu, and the poll loop that keeps the menu in
-/// sync with live status.
+/// The parts of one built menu the poll loop keeps mutating afterwards.
 ///
-/// The profile rows are fixed to the profiles present at launch, because the
-/// items are mutated in place afterwards. That is a deliberate trade: adding a
-/// profile is rare and deliberate, whereas a status change happens on every
-/// start, and rebuilding the whole `NSMenu` once a second to accommodate the
-/// rare case would make the common case flicker.
-pub fn build<R: Runtime>(app: &tauri::App<R>, state: &SharedState) -> tauri::Result<()> {
-    let handle = app.handle().clone();
+/// Returned by [`build_menu`] alongside the `Menu` itself so a rebuild can swap
+/// in the new handles wholesale rather than reaching back into the menu — Tauri
+/// 2.11 exposes no way to look an item back up off a `TrayIcon`.
+struct MenuHandles<R: Runtime> {
+    status_item: MenuItem<R>,
+    profile_items: Vec<CheckMenuItem<R>>,
+}
 
-    // Read the initial state synchronously: the menu has to exist before the
-    // tray icon is built, and `setup` is not async.
-    //
-    // `block_on` on the main thread is only safe because this runs during
-    // `setup`, before the poll loop is spawned and before any menu click can
-    // arrive — so nothing else can be holding either lock. Do not move this
-    // call later in the app's life.
-    let initial = tauri::async_runtime::block_on(snapshot(state));
-
+/// Build the whole tray menu for one snapshot of the profile set.
+///
+/// Both [`build`] and the poll loop's rebuild path go through here, so the
+/// launch menu and every rebuilt menu are the same construction: same item
+/// order, same ids — in particular the `{PROFILE_PREFIX}{id}` scheme the click
+/// handler dispatches on — and no chance of the two drifting apart.
+///
+/// `autostart` is passed in rather than constructed here, and that is the whole
+/// trick to surviving a rebuild. A Tauri `CheckMenuItem<R>` is an `Arc` around
+/// one muda item, and muda keys its native `NSMenuItem`s by parent menu id, so
+/// the *same* item can sit in a fresh menu and `set_checked` still writes
+/// through to it. Carrying the item across a rebuild therefore preserves both
+/// halves of the problem at once: the checkbox keeps whatever state it last
+/// had (no launchctl re-read, no silent reset to `false` if the query fails),
+/// and the clone handed to `on_menu_event` at launch stays the same underlying
+/// item, so the click handler goes on toggling the box the user can see.
+/// Constructing a fresh `CheckMenuItem` per rebuild would break both.
+fn build_menu<R: Runtime>(
+    app: &AppHandle<R>,
+    snapshot: &Snapshot,
+    autostart: &CheckMenuItem<R>,
+) -> tauri::Result<(tauri::menu::Menu<R>, MenuHandles<R>)> {
     let status_item =
-        MenuItem::with_id(app, ID_STATUS, initial.status_line(), false, None::<&str>)?;
+        MenuItem::with_id(app, ID_STATUS, snapshot.status_line(), false, None::<&str>)?;
 
-    let profile_items: Vec<CheckMenuItem<R>> = initial
+    let profile_items: Vec<CheckMenuItem<R>> = snapshot
         .rows
         .iter()
         .map(|row| {
@@ -247,14 +268,6 @@ pub fn build<R: Runtime>(app: &tauri::App<R>, state: &SharedState) -> tauri::Res
         true,
         None::<&str>,
     )?;
-    let autostart = CheckMenuItem::with_id(
-        app,
-        ID_AUTOSTART,
-        "Launch at Login",
-        true,
-        autostart_enabled(&handle),
-        None::<&str>,
-    )?;
     let quit = MenuItem::with_id(app, ID_QUIT, "Quit", true, Some("Cmd+Q"))?;
 
     let mut builder = MenuBuilder::new(app).item(&status_item).separator();
@@ -266,10 +279,66 @@ pub fn build<R: Runtime>(app: &tauri::App<R>, state: &SharedState) -> tauri::Res
         .item(&open_profiles)
         .item(&open_logs)
         .item(&refresh)
-        .item(&autostart)
+        .item(autostart)
         .item(&PredefinedMenuItem::separator(app)?)
         .item(&quit)
         .build()?;
+
+    Ok((
+        menu,
+        MenuHandles {
+            status_item,
+            profile_items,
+        },
+    ))
+}
+
+/// The identity of the profile set a menu was built from: the ids, in order.
+///
+/// Order is part of the identity, not just the set. `snapshot.rows` follows
+/// config order and the items are paired with it positionally, so a reorder
+/// with no additions or deletions would leave every label on the wrong item —
+/// which is worse than a missing row, because it is not visibly wrong.
+fn profile_ids(snapshot: &Snapshot) -> Vec<String> {
+    snapshot.rows.iter().map(|row| row.id.clone()).collect()
+}
+
+/// Build the tray icon, its menu, and the poll loop that keeps the menu in
+/// sync with live status.
+///
+/// The profile rows track the profile set as it changes: the poll loop rebuilds
+/// the menu when — and only when — the ids it was built from stop matching the
+/// snapshot. A status change, which happens on every start, is still an
+/// in-place `set_text`/`set_checked` on the existing items, so the common case
+/// does not flicker; a profile added or deleted in the Profiles window is rare
+/// and deliberate, and pays for a rebuild. Rebuilding unconditionally once a
+/// second would be the flickering trade; rebuilding on change is not.
+pub fn build<R: Runtime>(app: &tauri::App<R>, state: &SharedState) -> tauri::Result<()> {
+    let handle = app.handle().clone();
+
+    // Read the initial state synchronously: the menu has to exist before the
+    // tray icon is built, and `setup` is not async.
+    //
+    // `block_on` on the main thread is only safe because this runs during
+    // `setup`, before the poll loop is spawned and before any menu click can
+    // arrive — so nothing else can be holding either lock. Do not move this
+    // call later in the app's life.
+    let initial = tauri::async_runtime::block_on(snapshot(state));
+    let initial_ids = profile_ids(&initial);
+
+    // Read once here and never again except on click, as before — see the note
+    // in `spawn_poll_loop` on why `Launch at Login` is not polled. From here on
+    // this item outlives every menu it is placed in.
+    let autostart = CheckMenuItem::with_id(
+        app,
+        ID_AUTOSTART,
+        "Launch at Login",
+        true,
+        autostart_enabled(&handle),
+        None::<&str>,
+    )?;
+
+    let (menu, handles) = build_menu(&handle, &initial, &autostart)?;
 
     let click_state = state.clone();
     let click_autostart = autostart.clone();
@@ -306,45 +375,95 @@ pub fn build<R: Runtime>(app: &tauri::App<R>, state: &SharedState) -> tauri::Res
         })
         .build(app)?;
 
-    spawn_poll_loop(state.clone(), status_item, profile_items);
+    spawn_poll_loop(handle, state.clone(), autostart, handles, initial_ids);
 
     Ok(())
 }
 
-/// Keep the status line and the profile rows in step with live status.
+/// Keep the status line and the profile rows in step with live status, and the
+/// profile rows themselves in step with the profile set.
 ///
-/// Only writes an item when its text or checked state actually changed:
-/// `set_text` on macOS goes through to `NSMenuItem`, and rewriting three
-/// unchanged labels every second is churn the OS does not need.
+/// Two paths, and which one runs is decided by [`profile_ids`]:
+///
+/// - The set is unchanged (essentially always): write only the items whose text
+///   or checked state actually changed. `set_text` on macOS goes through to
+///   `NSMenuItem`, and rewriting unchanged labels every second is churn the OS
+///   does not need.
+/// - The set changed (a profile added, deleted, or reordered in the Profiles
+///   window): rebuild the menu, hand it to the tray, and adopt the new handles.
+///   Without this an added profile would never render and a deleted one would
+///   leave a row that clicks through to `no profile with id '…'`.
 fn spawn_poll_loop<R: Runtime>(
+    app: AppHandle<R>,
     state: SharedState,
-    status_item: MenuItem<R>,
-    profile_items: Vec<CheckMenuItem<R>>,
+    autostart: CheckMenuItem<R>,
+    handles: MenuHandles<R>,
+    initial_ids: Vec<String>,
 ) {
     tauri::async_runtime::spawn(async move {
+        let mut handles = handles;
+        let mut known_ids = initial_ids;
         let mut last_status = String::new();
-        let mut last_labels: Vec<String> = vec![String::new(); profile_items.len()];
-        let mut last_checked: Vec<Option<bool>> = vec![None; profile_items.len()];
+        let mut last_labels: Vec<String> = vec![String::new(); handles.profile_items.len()];
+        let mut last_checked: Vec<Option<bool>> = vec![None; handles.profile_items.len()];
 
         loop {
             tokio::time::sleep(POLL_INTERVAL).await;
 
             // Both guards are dropped inside `snapshot`, before any of the
-            // menu writes below — see the module docs on locking.
+            // menu writes below — see the module docs on locking. The rebuild
+            // below is a menu write like any other and is held to the same
+            // rule: no lock is live across it.
             let snapshot = snapshot(&state).await;
+
+            let ids = profile_ids(&snapshot);
+            if ids != known_ids {
+                // `set_menu` replaces the tray's menu atomically as far as the
+                // OS is concerned, and a click already in flight is dispatched
+                // by id against the *live* config rather than against this
+                // menu, so a stale click resolves correctly or reports a
+                // missing profile — the same answer the webview would give.
+                //
+                // A `None` tray means the icon is gone and there is nothing to
+                // render into; a failed build or `set_menu` means the old menu
+                // is still installed. Either way the loop keeps its existing
+                // handles and tries again next tick rather than exiting and
+                // freezing the menu for good.
+                let rebuilt = app.tray_by_id(TRAY_ID).and_then(|tray| {
+                    let (menu, new_handles) = build_menu(&app, &snapshot, &autostart).ok()?;
+                    tray.set_menu(Some(menu)).ok()?;
+                    Some(new_handles)
+                });
+
+                if let Some(new_handles) = rebuilt {
+                    last_status = snapshot.status_line();
+                    last_labels = snapshot.rows.iter().map(|row| row.label()).collect();
+                    last_checked = snapshot.rows.iter().map(|row| Some(row.checked())).collect();
+                    handles = new_handles;
+                    known_ids = ids;
+                    // The freshly built items already carry this snapshot's
+                    // text and checked state, so there is nothing left to
+                    // write this tick.
+                    continue;
+                }
+                // Fall through on failure: the old menu is still installed and
+                // still matches `known_ids`, so the in-place updates below are
+                // the right thing to do with it.
+            }
 
             let status_line = snapshot.status_line();
             if status_line != last_status {
-                let _ = status_item.set_text(&status_line);
+                let _ = handles.status_item.set_text(&status_line);
                 last_status = status_line;
             }
 
             // `snapshot.rows` follows config order, the same order the items
-            // were built in. `zip` is the safe pairing either way: if a
-            // profile were added at runtime the extra row is simply not
-            // rendered until the next launch, rather than shifting every
-            // label onto the wrong item.
-            for (index, (item, row)) in profile_items.iter().zip(&snapshot.rows).enumerate() {
+            // were built in, and `ids == known_ids` above establishes that the
+            // two still line up one-for-one. `zip` stays as the pairing so a
+            // failed rebuild degrades to the old truncating behaviour rather
+            // than panicking on an index.
+            for (index, (item, row)) in handles.profile_items.iter().zip(&snapshot.rows).enumerate()
+            {
                 let label = row.label();
                 if label != last_labels[index] {
                     let _ = item.set_text(&label);
@@ -361,7 +480,9 @@ fn spawn_poll_loop<R: Runtime>(
             // outside the app (System Settings > Login Items), but reading it
             // means a launchctl query, and doing that every second for a
             // checkbox nobody is looking at is not worth it. It is read once
-            // at launch and re-read on every click.
+            // at launch and re-read on every click. A rebuild does not disturb
+            // it: the same item is carried into the new menu — see
+            // [`build_menu`].
         }
     });
 }
@@ -706,6 +827,59 @@ mod tests {
             message: "port 15432 is already in use".to_string(),
             fix_command: None,
         }
+    }
+
+    fn snapshot_of(names: &[&str]) -> Snapshot {
+        Snapshot {
+            rows: names
+                .iter()
+                .map(|n| row(n, false, ProxyStatus::Stopped))
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn identical_profile_sets_need_no_rebuild() {
+        let before = profile_ids(&snapshot_of(&["dev", "stg", "prd"]));
+        let after = profile_ids(&snapshot_of(&["dev", "stg", "prd"]));
+        assert_eq!(before, after);
+    }
+
+    #[test]
+    fn added_or_deleted_profile_triggers_rebuild() {
+        let before = profile_ids(&snapshot_of(&["dev", "stg"]));
+        assert_ne!(before, profile_ids(&snapshot_of(&["dev", "stg", "uat"])));
+        assert_ne!(before, profile_ids(&snapshot_of(&["dev"])));
+    }
+
+    #[test]
+    fn reordering_triggers_rebuild() {
+        // Items pair with rows positionally, so a reorder with no additions
+        // would leave every label on the wrong item — worse than a missing
+        // row, because nothing looks visibly wrong.
+        assert_ne!(
+            profile_ids(&snapshot_of(&["dev", "stg"])),
+            profile_ids(&snapshot_of(&["stg", "dev"]))
+        );
+    }
+
+    #[test]
+    fn renaming_display_name_alone_does_not_trigger_rebuild() {
+        // Ids are stable across a rename; the in-place set_text already
+        // handles the new label, so a rebuild would be pure churn.
+        let mut renamed = snapshot_of(&["dev", "stg"]);
+        renamed.rows[0].name = "development".to_string();
+        assert_eq!(
+            profile_ids(&snapshot_of(&["dev", "stg"])),
+            profile_ids(&renamed)
+        );
+    }
+
+    #[test]
+    fn status_change_alone_does_not_trigger_rebuild() {
+        let mut running = snapshot_of(&["dev"]);
+        running.rows[0].status = ProxyStatus::Running;
+        assert_eq!(profile_ids(&snapshot_of(&["dev"])), profile_ids(&running));
     }
 
     #[test]

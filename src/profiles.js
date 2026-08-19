@@ -300,8 +300,7 @@ function renderDetail() {
         'div',
         'notice-body',
         'Choose “Refresh Connection Names” below to look them up from gcloud, ' +
-          'or type them in here. New environments appear in the menu bar ' +
-          'after the app restarts.',
+          'or type them in here.',
       ),
     );
     container.appendChild(hint);
@@ -592,12 +591,8 @@ async function addProfile() {
     clearError();
     selectedId = created.id;
     await loadProfiles();
-    // The tray menu's profile rows are built once at launch (rebuilding the
-    // NSMenu every poll would make the common case flicker), so a profile
-    // added now will not appear there until the app restarts. The footer note
-    // has to share a row with three buttons, so the full explanation lives in
-    // the detail pane's notice and this stays short enough not to squeeze
-    // them.
+    // The tray menu rebuilds itself when the profile set changes, so this
+    // appears in the menu bar within a poll interval — no restart needed.
     note('save-note', 'Added.');
 
     const field = $(NAME_FIELD_ID);
@@ -642,11 +637,9 @@ async function deleteProfile() {
     // Let loadProfiles pick the fallback selection rather than guessing here.
     selectedId = null;
     await loadProfiles();
-    // Same caveat as adding: the tray's rows are fixed at launch, so the
-    // deleted environment lingers there until the app restarts. Clicking it
-    // is inert rather than dangerous -- the backend rejects the unknown id
-    // and the tray shows that error.
-    note('save-note', 'Deleted. Restart to update the menu bar.');
+    // The tray rebuilds on profile-set changes, so the row disappears from
+    // the menu bar within a poll interval.
+    note('save-note', 'Deleted.');
   } catch (error) {
     note('save-note', '');
     showError('Could not delete the environment', error);
