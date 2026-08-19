@@ -67,10 +67,7 @@ struct WindowGeometry {
 /// earlier build, and a map means those are simply ignored rather than
 /// misparsed.
 fn window_state_path() -> Option<PathBuf> {
-    dirs::config_dir().map(|dir| {
-        dir.join("fh-cloud-sql-proxy-gui")
-            .join("window-state.json")
-    })
+    dirs::config_dir().map(|dir| dir.join("fh-cloud-sql-proxy-gui").join("window-state.json"))
 }
 
 /// Read every remembered window geometry. A missing or corrupt file is not an

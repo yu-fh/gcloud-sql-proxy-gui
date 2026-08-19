@@ -174,10 +174,7 @@ pub enum ValidationError {
     /// log lines, the port table — so two instances sharing one would leave
     /// the user unable to tell which row is which.
     #[error("profile '{profile}' has more than one {role:?} instance")]
-    DuplicateRole {
-        profile: String,
-        role: InstanceRole,
-    },
+    DuplicateRole { profile: String, role: InstanceRole },
 
     /// Two profiles share the same id.
     #[error("duplicate profile id '{0}'")]
@@ -377,7 +374,10 @@ mod tests {
         let mut empty = standard_profile("dev");
         empty.instances.clear();
         let cfg = config(vec![empty]);
-        assert_eq!(cfg.validate(), Err(ValidationError::NoInstances("dev".to_string())));
+        assert_eq!(
+            cfg.validate(),
+            Err(ValidationError::NoInstances("dev".to_string()))
+        );
     }
 
     #[test]
@@ -408,7 +408,10 @@ mod tests {
     #[test]
     fn validate_rejects_duplicate_profile_ids() {
         let cfg = config(vec![standard_profile("dev"), standard_profile("dev")]);
-        assert_eq!(cfg.validate(), Err(ValidationError::DuplicateId("dev".to_string())));
+        assert_eq!(
+            cfg.validate(),
+            Err(ValidationError::DuplicateId("dev".to_string()))
+        );
     }
 
     #[test]

@@ -384,7 +384,11 @@ mod tests {
         // They must not any more: a user-created profile called "dev" with no
         // probe host configured has no signal available.
         for name in ["dev", "stg", "prd", "staging-2", ""] {
-            assert_eq!(vpn_probe_host_for(&profile_named(name)), None, "name {name}");
+            assert_eq!(
+                vpn_probe_host_for(&profile_named(name)),
+                None,
+                "name {name}"
+            );
         }
     }
 

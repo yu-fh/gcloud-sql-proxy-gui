@@ -197,7 +197,12 @@ mod tests {
     fn seed_profiles_all_use_standard_ports() {
         let cfg = seed_profiles();
         for profile in &cfg.profiles {
-            assert_eq!(profile.ports(), vec![15432, 15433], "profile {}", profile.id);
+            assert_eq!(
+                profile.ports(),
+                vec![15432, 15433],
+                "profile {}",
+                profile.id
+            );
         }
     }
 

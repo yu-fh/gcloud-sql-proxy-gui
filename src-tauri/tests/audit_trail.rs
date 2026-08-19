@@ -155,7 +155,10 @@ async fn a_bind_failure_is_recorded_as_an_error_with_its_diagnosis() {
         .with_env("FAKE_PROXY_MODE", "bind")
         .with_audit(audit.clone());
 
-    manager.start(&test_profile("dev")).await.expect("spawn succeeds");
+    manager
+        .start(&test_profile("dev"))
+        .await
+        .expect("spawn succeeds");
     poll_status(&manager, "dev", "Failed", |s| {
         matches!(s, ProxyStatus::Failed(_))
     })

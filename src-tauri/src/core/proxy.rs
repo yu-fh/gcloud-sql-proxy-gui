@@ -171,26 +171,35 @@ impl ProxyManager {
     /// where `try_wait` hands it over.
     fn reap_exited(&mut self) {
         let audit = &self.audit;
-        self.children.retain(|profile_id, child| match child.try_wait() {
-            Ok(Some(status)) => {
-                let described = match status.code() {
-                    Some(0) => "exited cleanly (code 0)".to_string(),
-                    Some(code) => format!("exited with code {code}"),
-                    // No code means a signal, which is the normal path for a
-                    // child we killed ourselves.
-                    None => format!("exited via signal ({status})"),
-                };
-                if status.success() {
-                    audit.info(Category::Event, Some(profile_id), format!("child {described}"));
-                } else {
-                    audit.warn(Category::Event, Some(profile_id), format!("child {described}"));
+        self.children
+            .retain(|profile_id, child| match child.try_wait() {
+                Ok(Some(status)) => {
+                    let described = match status.code() {
+                        Some(0) => "exited cleanly (code 0)".to_string(),
+                        Some(code) => format!("exited with code {code}"),
+                        // No code means a signal, which is the normal path for a
+                        // child we killed ourselves.
+                        None => format!("exited via signal ({status})"),
+                    };
+                    if status.success() {
+                        audit.info(
+                            Category::Event,
+                            Some(profile_id),
+                            format!("child {described}"),
+                        );
+                    } else {
+                        audit.warn(
+                            Category::Event,
+                            Some(profile_id),
+                            format!("child {described}"),
+                        );
+                    }
+                    false
                 }
-                false
-            }
-            // Still running, or the status could not be read -- either way the
-            // child stays in the map.
-            _ => true,
-        });
+                // Still running, or the status could not be read -- either way the
+                // child stays in the map.
+                _ => true,
+            });
     }
 
     /// The OS pid of a running child, if any. Used by tests to assert against
@@ -240,11 +249,7 @@ impl ProxyManager {
         self.audit.info(
             Category::Event,
             Some(&profile.id),
-            format!(
-                "spawning: {} {}",
-                self.binary.display(),
-                argv.join(" ")
-            ),
+            format!("spawning: {} {}", self.binary.display(), argv.join(" ")),
         );
 
         let mut child = command.spawn().map_err(|source| {
@@ -260,8 +265,11 @@ impl ProxyManager {
         })?;
 
         if let Some(pid) = child.id() {
-            self.audit
-                .info(Category::Event, Some(&profile.id), format!("spawned pid {pid}"));
+            self.audit.info(
+                Category::Event,
+                Some(&profile.id),
+                format!("spawned pid {pid}"),
+            );
         }
 
         let stdout = child.stdout.take();
@@ -507,10 +515,7 @@ fn spawn_exit_watcher(
         // observable moment of the exit, and that is what it records.
         let mut guard = statuses.lock().await;
         let previous = guard.get(&profile_id).cloned();
-        if matches!(
-            previous,
-            Some(ProxyStatus::Running | ProxyStatus::Starting)
-        ) {
+        if matches!(previous, Some(ProxyStatus::Running | ProxyStatus::Starting)) {
             audit.warn(
                 Category::Event,
                 Some(&profile_id),
@@ -707,7 +712,10 @@ mod tests {
             .find(|m| m.starts_with("spawning:"))
             .expect("the argv should be audited");
         // Full detail, no redaction: the connection names are the point.
-        assert!(spawning.contains("proj:us-central1:dev-primary?port=15432"), "{spawning}");
+        assert!(
+            spawning.contains("proj:us-central1:dev-primary?port=15432"),
+            "{spawning}"
+        );
         assert!(spawning.contains("--auto-iam-authn"), "{spawning}");
         assert!(
             messages.iter().any(|m| m.starts_with("spawn failed:")),
@@ -763,7 +771,10 @@ mod tests {
                 .all(|r| r.profile_id.as_deref() == Some("dev")),
             "every record from a profile operation should be tagged with it"
         );
-        assert_eq!(audit.filtered(None, Some("dev")).len(), audit.records().len());
+        assert_eq!(
+            audit.filtered(None, Some("dev")).len(),
+            audit.records().len()
+        );
     }
 
     #[tokio::test]

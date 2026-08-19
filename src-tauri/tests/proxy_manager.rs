@@ -183,7 +183,9 @@ async fn bind_failure_is_classified_as_failed_naming_the_port() {
     let mut m = manager("bind");
     let p = test_profile("dev");
 
-    m.start(&p).await.expect("spawn succeeds even though the proxy then fails");
+    m.start(&p)
+        .await
+        .expect("spawn succeeds even though the proxy then fails");
 
     let status = poll_until(&m, "dev", "Failed", |s| matches!(s, ProxyStatus::Failed(_))).await;
     let ProxyStatus::Failed(diagnosis) = status else {
@@ -263,7 +265,9 @@ async fn logs_are_captured_and_tagged_with_the_profile_id() {
     m.start(&test_profile("dev")).await.expect("start");
 
     let lines = poll_logs(&m, "dev", "the ready line", |lines| {
-        lines.iter().any(|l| l.contains("ready for new connections"))
+        lines
+            .iter()
+            .any(|l| l.contains("ready for new connections"))
     })
     .await;
 

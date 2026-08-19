@@ -357,9 +357,11 @@ pub async fn delete_profile(state: State<'_, SharedState>, id: String) -> Result
     store::save(&state.config_path, &next).map_err(|e| e.to_string())?;
     *config = next;
 
-    state
-        .audit
-        .info(Category::Action, Some(&id), format!("deleted profile '{id}'"));
+    state.audit.info(
+        Category::Action,
+        Some(&id),
+        format!("deleted profile '{id}'"),
+    );
 
     Ok(())
 }
@@ -397,10 +399,7 @@ pub async fn start_profile(state: State<'_, SharedState>, id: String) -> Result<
                 state.audit.info(
                     Category::Event,
                     Some(&id),
-                    format!(
-                        "port conflict: stopping {} first",
-                        conflicts.join(", ")
-                    ),
+                    format!("port conflict: stopping {} first", conflicts.join(", ")),
                 );
             }
             for conflict in &conflicts {
@@ -459,11 +458,9 @@ pub async fn start_profile(state: State<'_, SharedState>, id: String) -> Result<
     match manager.start(&profile).await {
         Ok(()) => Ok(()),
         Err(error) => {
-            state.audit.error(
-                Category::Event,
-                Some(&id),
-                format!("start failed: {error}"),
-            );
+            state
+                .audit
+                .error(Category::Event, Some(&id), format!("start failed: {error}"));
             Err(error.to_string())
         }
     }
@@ -583,10 +580,7 @@ pub async fn read_logs(
 
     Ok(LogsView {
         records,
-        file_path: state
-            .audit
-            .path()
-            .map(|path| path.display().to_string()),
+        file_path: state.audit.path().map(|path| path.display().to_string()),
         write_failures: state.audit.write_failures(),
     })
 }
@@ -629,7 +623,10 @@ pub async fn reveal_log_file(state: State<'_, SharedState>) -> Result<(), String
 
     match command.status().await {
         Ok(status) if status.success() => Ok(()),
-        Ok(status) => Err(format!("Finder could not open {} ({status})", target.display())),
+        Ok(status) => Err(format!(
+            "Finder could not open {} ({status})",
+            target.display()
+        )),
         Err(error) => Err(format!("Could not open Finder: {error}")),
     }
 }
@@ -700,7 +697,10 @@ mod tests {
         let mut after = before.clone();
         after[0].instances[1].port = 15999;
         let changes = describe_changes(&before, &after);
-        assert!(changes.contains("instance 1 port 15433 -> 15999"), "{changes}");
+        assert!(
+            changes.contains("instance 1 port 15433 -> 15999"),
+            "{changes}"
+        );
         // The untouched instance must not be reported.
         assert!(!changes.contains("instance 0"), "{changes}");
     }
@@ -754,7 +754,10 @@ mod tests {
             "impersonateServiceAccount",
             "vpnProbeHost",
         ] {
-            assert!(changes.contains(expected), "missing {expected} in: {changes}");
+            assert!(
+                changes.contains(expected),
+                "missing {expected} in: {changes}"
+            );
         }
     }
 

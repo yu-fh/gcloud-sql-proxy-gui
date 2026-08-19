@@ -328,7 +328,12 @@ impl Logger {
     /// thread reports failures through [`Logger::write_failures`] -- a menu bar
     /// app must not die because `~/Library/Logs` is read-only.
     pub fn to_file(path: PathBuf) -> Self {
-        Self::with_policy(path, DEFAULT_MEMORY_CAP, DEFAULT_MAX_BYTES, DEFAULT_GENERATIONS)
+        Self::with_policy(
+            path,
+            DEFAULT_MEMORY_CAP,
+            DEFAULT_MAX_BYTES,
+            DEFAULT_GENERATIONS,
+        )
     }
 
     /// A logger at the platform's conventional location, or memory-only if that
@@ -466,7 +471,11 @@ impl Logger {
     /// `profile_id` of `Some(id)` keeps only records tagged with that profile;
     /// records belonging to no profile are excluded, because a user filtering to
     /// "dev" is asking about dev and not about the startup banner.
-    pub fn filtered(&self, min_severity: Option<Severity>, profile_id: Option<&str>) -> Vec<Record> {
+    pub fn filtered(
+        &self,
+        min_severity: Option<Severity>,
+        profile_id: Option<&str>,
+    ) -> Vec<Record> {
         self.records()
             .into_iter()
             .filter(|record| match min_severity {
@@ -574,14 +583,16 @@ fn writer_loop(sink: Arc<Sink>, path: PathBuf, max_bytes: u64, generations: usiz
         if dropped > 0 {
             // Say so in the file. A silently short log is worse than one that
             // admits it lost lines.
-            buffer.push_str(&Record {
-                at_ms: now_ms(),
-                severity: Severity::Warn,
-                category: Category::System,
-                profile_id: None,
-                message: format!("audit queue overflowed; {dropped} record(s) not written"),
-            }
-            .to_line());
+            buffer.push_str(
+                &Record {
+                    at_ms: now_ms(),
+                    severity: Severity::Warn,
+                    category: Category::System,
+                    profile_id: None,
+                    message: format!("audit queue overflowed; {dropped} record(s) not written"),
+                }
+                .to_line(),
+            );
             buffer.push('\n');
         }
         for line in batch {
@@ -973,11 +984,7 @@ mod tests {
         for i in 0..6 {
             logger.info(Category::Proxy, Some("dev"), format!("line {i}"));
         }
-        let messages: Vec<String> = logger
-            .records()
-            .into_iter()
-            .map(|r| r.message)
-            .collect();
+        let messages: Vec<String> = logger.records().into_iter().map(|r| r.message).collect();
         assert_eq!(messages, vec!["line 3", "line 4", "line 5"]);
     }
 
@@ -1003,7 +1010,10 @@ mod tests {
         assert_eq!(logger.records().len(), 2);
         let contents = read(&path);
         for i in 0..8 {
-            assert!(contents.contains(&format!("event {i}")), "missing event {i}");
+            assert!(
+                contents.contains(&format!("event {i}")),
+                "missing event {i}"
+            );
         }
     }
 
@@ -1118,7 +1128,11 @@ mod tests {
         // megabyte in a unit test.
         let logger = Logger::with_policy(path.clone(), 5000, 400, 3);
         for i in 0..40 {
-            logger.info(Category::Proxy, Some("dev"), format!("rotation line {i:03}"));
+            logger.info(
+                Category::Proxy,
+                Some("dev"),
+                format!("rotation line {i:03}"),
+            );
             // Flush per record so the writer sees them as separate batches; a
             // single 40-record batch would be one oversized write rather than
             // an accumulation across the threshold.
@@ -1126,7 +1140,10 @@ mod tests {
         }
 
         let rotated = path.with_file_name("audit.log.1");
-        assert!(rotated.exists(), "expected audit.log.1 to exist after rotation");
+        assert!(
+            rotated.exists(),
+            "expected audit.log.1 to exist after rotation"
+        );
         assert!(path.exists(), "the active file must exist after rotation");
         assert!(
             std::fs::metadata(&path).expect("active file").len() <= 400 + 200,
@@ -1161,12 +1178,7 @@ mod tests {
         let count = std::fs::read_dir(dir.path())
             .expect("read_dir")
             .filter_map(Result::ok)
-            .filter(|entry| {
-                entry
-                    .file_name()
-                    .to_string_lossy()
-                    .starts_with("audit.log")
-            })
+            .filter(|entry| entry.file_name().to_string_lossy().starts_with("audit.log"))
             .count();
         // active + 2 generations, and never a third.
         assert!(count <= 3, "expected at most 3 files, found {count}");
@@ -1267,7 +1279,10 @@ mod tests {
             "gcloud account",
             "config path",
         ] {
-            assert!(labels.contains(&expected), "missing {expected} in {labels:?}");
+            assert!(
+                labels.contains(&expected),
+                "missing {expected} in {labels:?}"
+            );
         }
 
         // Injected values are reported verbatim.
@@ -1317,9 +1332,7 @@ mod tests {
         assert!(records.len() >= 6, "got {} records", records.len());
         assert!(records.iter().all(|r| r.category == Category::System));
         assert!(records.iter().all(|r| r.profile_id.is_none()));
-        assert!(records
-            .iter()
-            .any(|r| r.message == "app version: 0.1.0"));
+        assert!(records.iter().any(|r| r.message == "app version: 0.1.0"));
     }
 
     #[test]

@@ -87,8 +87,16 @@ mod tests {
             project: format!("fh-{id}-project"),
             region: "us-central1".to_string(),
             instances: vec![
-                instance(InstanceRole::Primary, &format!("proj:us-central1:{id}-primary"), primary_port),
-                instance(InstanceRole::Replica, &format!("proj:us-central1:{id}-replica"), replica_port),
+                instance(
+                    InstanceRole::Primary,
+                    &format!("proj:us-central1:{id}-primary"),
+                    primary_port,
+                ),
+                instance(
+                    InstanceRole::Replica,
+                    &format!("proj:us-central1:{id}-replica"),
+                    replica_port,
+                ),
             ],
             flags: ProxyFlags::default(),
             impersonate_service_account: None,
