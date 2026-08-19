@@ -4,3 +4,4 @@ node_modules/
 dist/
 .DS_Store
 src-tauri/gen/schemas/
+.playwright-mcp/

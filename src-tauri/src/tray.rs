@@ -55,6 +55,9 @@
 //! change costs nothing in the common case and is the only way an added profile
 //! ever appears or a deleted one ever goes away.
 
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tauri::menu::{CheckMenuItem, MenuBuilder, MenuItem, PredefinedMenuItem};
@@ -764,6 +767,89 @@ async fn refresh_connection_names<R: Runtime>(app: &AppHandle<R>) {
     }
 }
 
+/// Remembered geometry for one window label.
+#[derive(Clone, Copy, serde::Serialize, serde::Deserialize)]
+struct WindowGeometry {
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+}
+
+/// Where the remembered geometry lives: a small sidecar next to the profile
+/// config.
+///
+/// Deliberately *not* `tauri-plugin-window-state`. That plugin would do this
+/// job, but it pulls in a dependency tree and has to be registered in
+/// `main.rs`, and what it buys over ~40 lines here is machinery this app does
+/// not need: it tracks maximised/fullscreen/visibility for every window in the
+/// app, where this one has two windows that are only ever plain and resizable.
+/// A sidecar file keeps the whole feature inside the window code that owns it.
+fn window_state_path() -> Option<PathBuf> {
+    dirs::config_dir().map(|dir| {
+        dir.join("fh-cloud-sql-proxy-gui")
+            .join("window-state.json")
+    })
+}
+
+/// Read every remembered window geometry. A missing or corrupt file is not an
+/// error worth reporting -- the windows simply open at their default size,
+/// which is exactly what happens on first run.
+fn load_window_state() -> HashMap<String, WindowGeometry> {
+    window_state_path()
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default()
+}
+
+/// Persist one window's geometry, merging into whatever is already stored so
+/// the two windows do not overwrite each other.
+///
+/// Errors are swallowed on purpose: failing to remember a window position is
+/// not worth a modal, and the next launch just uses the default.
+fn save_window_geometry(label: &str, geometry: WindowGeometry) {
+    let Some(path) = window_state_path() else {
+        return;
+    };
+    let mut all = load_window_state();
+    all.insert(label.to_string(), geometry);
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(text) = serde_json::to_string_pretty(&all) {
+        let _ = std::fs::write(path, text);
+    }
+}
+
+/// Whether a remembered position still lands on a screen that exists.
+///
+/// Restoring blind is how a window ends up entirely off-canvas after someone
+/// unplugs the external display it was last on -- a window you cannot reach is
+/// worse than one in the wrong place. Requiring the saved origin to fall
+/// inside some current monitor is the cheap version of the check AppKit does.
+fn position_is_visible<R: Runtime>(app: &AppHandle<R>, geometry: &WindowGeometry) -> bool {
+    let Ok(monitors) = app.available_monitors() else {
+        return false;
+    };
+    monitors.iter().any(|monitor| {
+        let position = monitor.position();
+        let size = monitor.size();
+        let scale = monitor.scale_factor();
+        // Monitor geometry is physical; the saved geometry is logical.
+        let left = position.x as f64 / scale;
+        let top = position.y as f64 / scale;
+        let right = left + size.width as f64 / scale;
+        let bottom = top + size.height as f64 / scale;
+        // The title bar is what the user grabs, so it is the part that has to
+        // be on screen. Requiring the whole window would refuse to restore a
+        // window the user had deliberately hanging off an edge.
+        geometry.x >= left - 8.0
+            && geometry.x < right - 40.0
+            && geometry.y >= top - 8.0
+            && geometry.y < bottom - 40.0
+    })
+}
+
 /// Show a webview window, creating it on first use.
 ///
 /// A window is created lazily rather than at launch so the app costs nothing
@@ -785,27 +871,89 @@ fn open_window<R: Runtime>(
         return;
     }
 
-    let built = WebviewWindowBuilder::new(app, label, WebviewUrl::App(url.into()))
+    let remembered = load_window_state().get(label).copied();
+
+    let mut builder = WebviewWindowBuilder::new(app, label, WebviewUrl::App(url.into()))
         .title(title)
         // A unified title bar, as native settings windows have: the page draws
         // under the traffic lights instead of below a separate bar. The page
         // pays for this with a header strip that supplies the clearance and
         // the drag region -- see `.titlebar` in styles.css.
         .title_bar_style(tauri::TitleBarStyle::Overlay)
-        .inner_size(width, height)
         .resizable(true)
-        .build();
+        // Below this the footer's three buttons stop fitting on one line and
+        // the label/value rows collapse. A native window declares its minimum
+        // rather than letting the user drag it into an unusable shape.
+        .min_inner_size(420.0, 320.0);
 
-    match built {
+    // Restore size and position together: a remembered size at a default
+    // position would put the window somewhere the user never left it.
+    builder = match remembered {
+        Some(geometry) if position_is_visible(app, &geometry) => builder
+            .inner_size(geometry.width, geometry.height)
+            .position(geometry.x, geometry.y),
+        // No memory, or the screen it was on is gone: default size, and let
+        // the OS place it.
+        _ => builder.inner_size(width, height).center(),
+    };
+
+    match builder.build() {
         Ok(window) => {
             // With `ActivationPolicy::Accessory` the app is not the active
             // application, so a new window can open behind whatever the user
             // was in. Focusing it explicitly is what makes the click feel
             // like it did something.
             let _ = window.set_focus();
+            remember_geometry_on_close(&window, label.to_string());
         }
         Err(error) => report_error(app, &format!("Could not open {title}"), &error.to_string()),
     }
+}
+
+/// Record the window's geometry whenever it moves, resizes, or closes.
+///
+/// Saving on close alone is not enough: these windows are closed by ⌘W and by
+/// the traffic light, and on macOS a window that is destroyed does not
+/// reliably report its final frame. Tracking the last-seen good geometry as it
+/// changes and writing that is what actually survives.
+fn remember_geometry_on_close<R: Runtime>(window: &tauri::WebviewWindow<R>, label: String) {
+    let tracked: Arc<Mutex<Option<WindowGeometry>>> = Arc::new(Mutex::new(None));
+
+    let handle = window.clone();
+    let seen = tracked.clone();
+    window.on_window_event(move |event| match event {
+        tauri::WindowEvent::Moved(_) | tauri::WindowEvent::Resized(_) => {
+            // A minimised or zoomed window reports a frame that is not the one
+            // to restore, so only plain states are recorded.
+            if handle.is_minimized().unwrap_or(false) {
+                return;
+            }
+            if let (Ok(position), Ok(size), Ok(scale)) = (
+                handle.outer_position(),
+                handle.inner_size(),
+                handle.scale_factor(),
+            ) {
+                if size.width == 0 || size.height == 0 {
+                    return;
+                }
+                if let Ok(mut slot) = seen.lock() {
+                    *slot = Some(WindowGeometry {
+                        x: position.x as f64 / scale,
+                        y: position.y as f64 / scale,
+                        width: size.width as f64 / scale,
+                        height: size.height as f64 / scale,
+                    });
+                }
+            }
+        }
+        tauri::WindowEvent::CloseRequested { .. } | tauri::WindowEvent::Destroyed => {
+            let geometry = seen.lock().ok().and_then(|slot| *slot);
+            if let Some(geometry) = geometry {
+                save_window_geometry(&label, geometry);
+            }
+        }
+        _ => {}
+    });
 }
 
 /// Whether the app is registered to launch at login. A failed query reads as

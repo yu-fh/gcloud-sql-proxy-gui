@@ -16,6 +16,39 @@
 
 const invoke = window.__TAURI__.core.invoke;
 
+/// The native window this page is drawn in, for ⌘W and ⌘M.
+///
+/// `withGlobalTauri` puts the whole API on the window, so this needs no
+/// bundler. Guarded because the page is also driven headless in a plain
+/// browser during development, where there is no window to control.
+const tauriWindow = window.__TAURI__.window
+  ? window.__TAURI__.window.getCurrentWindow()
+  : null;
+
+/// The native alert plugin, used for destructive confirmations.
+///
+/// `window.confirm()` inside a webview draws a *web* alert with the page's
+/// origin in the title -- the single most web-app-looking thing this window
+/// could put on screen. `tauri-plugin-dialog` draws a real NSAlert, which is
+/// what the checklist asks for and what the tray already uses for the
+/// production-start confirmation.
+const nativeDialog = window.__TAURI__.dialog || null;
+
+/// Ask a destructive yes/no question with a native alert. Falls back to the
+/// webview's own confirm only when the plugin is absent (headless dev), so the
+/// flow is never silently skipped.
+async function confirmDestructive(message, title, okLabel) {
+  if (nativeDialog && nativeDialog.confirm) {
+    return nativeDialog.confirm(message, {
+      title,
+      kind: 'warning',
+      okLabel,
+      cancelLabel: 'Cancel',
+    });
+  }
+  return window.confirm(`${title}\n\n${message}`);
+}
+
 // ---------------------------------------------------------------------------
 // State
 // ---------------------------------------------------------------------------
@@ -182,13 +215,10 @@ function renderEnvList() {
   clear(list);
 
   if (profiles.length === 0) {
-    list.appendChild(
-      el(
-        'div',
-        'row row-empty',
-        'No environments yet. Choose + below to add one.',
-      ),
-    );
+    // Terse, as a native empty state is. The + button is directly below and
+    // already says what it does; a sentence explaining it would be the web
+    // habit of over-explaining an interface that is already self-evident.
+    list.appendChild(el('div', 'row row-empty', 'No environments.'));
     return;
   }
 
@@ -240,24 +270,88 @@ function select(id) {
   renderListControls();
 }
 
-/// Arrow keys move the selection, Space/Enter re-assert it. Mirrors how a
-/// native list behaves when it has focus.
+/// Type-ahead buffer. Native lists accumulate keystrokes for about a second,
+/// so typing "st" lands on "Staging" rather than jumping to "S" then "T".
+let typeAhead = '';
+let typeAheadTimer = null;
+const TYPE_AHEAD_MS = 900;
+
+/// Find the next profile whose name starts with `prefix`, searching forward
+/// from the current selection and wrapping, as AppKit's list search does.
+function matchByPrefix(prefix, fromIndex) {
+  const lower = prefix.toLowerCase();
+  for (let step = 0; step < profiles.length; step += 1) {
+    // Start at the current row when the buffer is still growing (so "st"
+    // keeps matching Staging), otherwise at the one after it.
+    const i = (fromIndex + step) % profiles.length;
+    const name = (profiles[i].name || profiles[i].id).toLowerCase();
+    if (name.startsWith(lower)) return profiles[i];
+  }
+  return null;
+}
+
+/// Arrow keys move the selection, Home/End jump to the ends, Space/Enter
+/// re-assert it, and letters do type-ahead. Mirrors how a native list behaves
+/// when it has focus.
 function onListKey(event, id) {
   const index = profiles.findIndex((p) => p.id === id);
   let next = null;
 
   if (event.key === 'ArrowDown') next = profiles[index + 1];
   else if (event.key === 'ArrowUp') next = profiles[index - 1];
+  else if (event.key === 'Home') next = profiles[0];
+  else if (event.key === 'End') next = profiles[profiles.length - 1];
   else if (event.key === 'Enter' || event.key === ' ') next = profiles[index];
-  else return;
+  else if (
+    // A single printable character with no command/control modifier is a
+    // type-ahead keystroke. Alt is allowed through because option-accented
+    // letters are still letters.
+    event.key.length === 1 &&
+    !event.metaKey &&
+    !event.ctrlKey &&
+    event.key !== ' '
+  ) {
+    clearTimeout(typeAheadTimer);
+    typeAheadTimer = setTimeout(() => {
+      typeAhead = '';
+    }, TYPE_AHEAD_MS);
+
+    const extended = typeAhead + event.key;
+    // A repeated single character cycles through the rows starting with it,
+    // which is what a native list does when you press the same letter twice.
+    const repeated = extended.length > 1 && /^(.)\1+$/.test(extended);
+
+    if (repeated) {
+      typeAhead = extended;
+      next = matchByPrefix(event.key, index + 1);
+    } else {
+      // Growing the buffer refines the current match, so the search starts at
+      // the selected row rather than after it.
+      next = matchByPrefix(extended, index);
+      if (next) {
+        typeAhead = extended;
+      } else {
+        // The extended prefix matches nothing. A native list does not just
+        // beep: it treats the keystroke as the start of a new search, so
+        // typing "s" then "p" lands on Production rather than dying on "sp".
+        typeAhead = event.key;
+        next = matchByPrefix(event.key, index);
+      }
+    }
+  } else return;
 
   event.preventDefault();
   if (!next) return;
   select(next.id);
-  // renderEnvList replaced the nodes, so focus has to be re-established on the
-  // newly selected row rather than the one that was clicked.
+  focusRow(next.id);
+}
+
+/// Put focus on a row by profile id. `renderEnvList` replaces the nodes on
+/// every selection change, so focus has to be re-established on the new node
+/// rather than kept on the one that was clicked.
+function focusRow(id) {
   const rows = $('env-list').querySelectorAll('.row-select');
-  const target = rows[profiles.findIndex((p) => p.id === next.id)];
+  const target = rows[profiles.findIndex((p) => p.id === id)];
   if (target) target.focus();
 }
 
@@ -468,6 +562,15 @@ function fieldRow(label, value, onInput, placeholder, type, sizeClass, fixedId) 
   input.type = type || 'text';
   input.value = value === null || value === undefined ? '' : value;
   if (placeholder) input.placeholder = placeholder;
+  // Every field here holds an identifier -- a connection name, a GCP project,
+  // a port, a hostname. None of it is prose, so the browser's writing aids are
+  // all wrong: spellcheck redlines "fh-dev-1234", autocapitalize would upcase
+  // a project id, and autocorrect would rewrite a hostname. AppKit text fields
+  // have these off unless asked; a webview has them on.
+  input.spellcheck = false;
+  input.setAttribute('autocomplete', 'off');
+  input.setAttribute('autocorrect', 'off');
+  input.setAttribute('autocapitalize', 'off');
   input.addEventListener('input', () => onInput(input.value));
   row.appendChild(input);
 
@@ -583,7 +686,7 @@ async function saveProfiles() {
 /// typed but not yet saved would be lost. That is why the button warns first
 /// when there are unsaved changes.
 async function addProfile() {
-  if (!confirmDiscardingEdits('Adding an environment')) return;
+  if (!(await confirmDiscardingEdits('Adding an environment'))) return;
 
   note('save-note', 'Adding…');
   try {
@@ -615,20 +718,30 @@ async function deleteProfile() {
   const label = profile.name || profile.id;
   const running = profile.status === 'running' || profile.status === 'starting';
 
-  // confirm() is a real modal here (a Tauri webview shows the native sheet),
-  // and deletion is destructive and not undoable.
-  let message = `Delete the environment “${label}”?`;
+  // A native alert, not a page modal: this is destructive and not undoable,
+  // and the checklist is explicit that confirmations belong to NSAlert rather
+  // than to a div with a backdrop.
+  //
+  // The consequences go in the body rather than the title, as an NSAlert's
+  // informative text does; the title asks the question.
+  const consequences = [];
   if (running) {
-    message +=
-      '\n\nIts proxy is running and will be stopped first, ' +
-      'which will disconnect anything using its ports.';
+    consequences.push(
+      'Its proxy is running and will be stopped first, which will ' +
+        'disconnect anything using its ports.',
+    );
   }
   if (profile.danger) {
-    message += '\n\nThis environment is marked as production.';
+    consequences.push('This environment is marked as production.');
   }
-  message += '\n\nThis cannot be undone.';
+  consequences.push('This cannot be undone.');
 
-  if (!window.confirm(message)) return;
+  const ok = await confirmDestructive(
+    consequences.join('\n\n'),
+    `Delete the environment “${label}”?`,
+    'Delete',
+  );
+  if (!ok) return;
 
   note('save-note', 'Deleting…');
   try {
@@ -647,11 +760,16 @@ async function deleteProfile() {
 }
 
 /// Add and delete both reload from disk, so warn before dropping edits that
-/// have been typed but not saved. Returns true when it is safe to continue.
-function confirmDiscardingEdits(action) {
+/// have been typed but not saved. Resolves true when it is safe to continue.
+///
+/// Async because the native alert is: `tauri-plugin-dialog` returns a promise
+/// where `window.confirm` blocked the thread.
+async function confirmDiscardingEdits(action) {
   if ($('save-note').textContent !== 'Unsaved changes') return true;
-  return window.confirm(
+  return confirmDestructive(
+    'Your unsaved changes will be lost.',
     `${action} will discard your unsaved changes. Continue?`,
+    'Discard',
   );
 }
 
@@ -669,25 +787,42 @@ function renderListControls() {
 // show a list legibly) and only `apply_changes` commits them.
 // ---------------------------------------------------------------------------
 
+/// How long an operation may take before it is worth telling the user it is
+/// running. Under this, a native app shows nothing and simply commits the
+/// result when it lands; a placeholder makes a fast operation feel slow.
+const BUSY_THRESHOLD_MS = 200;
+
+/// Run `work`, showing `message` only if it is still running after 200ms.
+/// Returns whatever `work` resolves to.
+///
+/// This replaces the old unconditional placeholder row, which was a loading
+/// skeleton by another name: it appeared for a gcloud call that usually
+/// answers in well under a frame's worth of perceptible delay.
+async function withBusyNote(id, message, work) {
+  let shown = false;
+  const timer = setTimeout(() => {
+    shown = true;
+    note(id, message);
+  }, BUSY_THRESHOLD_MS);
+  try {
+    return await work();
+  } finally {
+    clearTimeout(timer);
+    if (shown) note(id, '');
+  }
+}
+
 async function refreshConnectionNames() {
   note('save-note', '');
-  const panel = $('changes');
-  clear(panel);
-  panel.hidden = false;
-  panel.appendChild(el('h2', 'group-label', 'Refresh'));
-  const group = el('div', 'group');
-  group.appendChild(el('div', 'row row-empty', 'Asking gcloud for instances…'));
-  panel.appendChild(group);
-
   try {
-    const result = await invoke('refresh_connection_names');
+    const result = await withBusyNote('save-note', 'Asking gcloud…', () =>
+      invoke('refresh_connection_names'),
+    );
     clearError();
     pendingChanges = result.changes || [];
     renderChanges();
   } catch (error) {
-    panel.hidden = true;
-    clear(panel);
-    pendingChanges = [];
+    hideChanges();
     showError('Could not refresh connection names', error);
   }
 }
@@ -697,24 +832,13 @@ function renderChanges() {
   clear(panel);
   panel.hidden = false;
 
+  // Nothing to review is not a panel. A whole group plus a Dismiss button to
+  // report "no changes" is the web habit of making a result into a page; the
+  // footer status line already exists for exactly this and needs no dismissing.
   if (pendingChanges.length === 0) {
-    panel.appendChild(el('h2', 'group-label', 'Refresh'));
-    const group = el('div', 'group');
-    group.appendChild(
-      el(
-        'div',
-        'row row-empty',
-        'Connection names are already up to date. Nothing to change.',
-      ),
-    );
-    panel.appendChild(group);
-
-    const actions = el('div', 'change-actions');
-    const dismiss = el('button', '', 'Dismiss');
-    dismiss.type = 'button';
-    dismiss.addEventListener('click', hideChanges);
-    actions.appendChild(dismiss);
-    panel.appendChild(actions);
+    panel.hidden = true;
+    clear(panel);
+    note('save-note', 'Connection names are already up to date.');
     return;
   }
 
@@ -761,6 +885,31 @@ function renderChanges() {
   actions.appendChild(cancel);
   actions.appendChild(apply);
   panel.appendChild(actions);
+
+  revealChanges();
+}
+
+/// Bring the diff into view.
+///
+/// Without this the panel renders ~90px below the fold of a 560px window with
+/// the content region still scrolled to the top, so "Refresh Connection Names"
+/// looks like a button that does nothing. Measured, not guessed: the panel's
+/// top was 647px in a 560px viewport.
+///
+/// Deliberately instant. `behavior: 'smooth'` is the web idiom the checklist
+/// names; AppKit scrolls a revealed control into view in one step.
+function revealChanges() {
+  const panel = $('changes');
+  const content = document.querySelector('.content');
+  if (!content) return;
+  // Show the panel's top with a little of the group above it for context,
+  // clamped to the scrollable range.
+  const target = panel.offsetTop - 12;
+  content.scrollTop = Math.max(0, Math.min(target, content.scrollHeight));
+  // The panel is the subject now, so put the keyboard there too: Apply is the
+  // default action and Escape cancels (see the document key handler).
+  const apply = panel.querySelector('button.default') || panel.querySelector('button');
+  if (apply) apply.focus();
 }
 
 function hideChanges() {
@@ -818,17 +967,20 @@ function renderLogFilterOptions() {
 }
 
 async function loadLogs() {
-  note('log-note', 'Loading…');
   // The dropdown may be empty on a logs-window cold start, in which case the
   // profile list has not loaded yet; an empty value means "all" regardless.
   const selected = $('log-filter').value;
   try {
-    const lines = await invoke('read_logs', { id: selected || null });
+    // Reading a ring buffer in memory is far under the 200ms threshold, so the
+    // note only ever appears if something is genuinely slow.
+    const lines = await withBusyNote('log-note', 'Loading…', () =>
+      invoke('read_logs', { id: selected || null }),
+    );
     clearError();
     const output = $('logs');
     output.textContent = lines.length
       ? lines.join('\n')
-      : 'No log output yet. Start a profile from the menu bar icon.';
+      : 'No log output yet.';
     // Newest lines are last, so pin to the bottom.
     output.scrollTop = output.scrollHeight;
     note('log-note', `${lines.length} line${lines.length === 1 ? '' : 's'}`);
@@ -854,6 +1006,90 @@ $('btn-refresh').addEventListener('click', refreshConnectionNames);
 $('btn-logs-refresh').addEventListener('click', loadLogs);
 $('log-filter').addEventListener('change', loadLogs);
 window.addEventListener('hashchange', applyView);
+
+// --- native window keyboard ------------------------------------------------
+//
+// The app has no menu bar of its own (ActivationPolicy::Accessory, so no
+// application menu), which means nothing supplies the ⌘W and ⌘M that every
+// macOS window is expected to answer. Without these the window can only be
+// dismissed by aiming at the traffic light -- the clearest "this is a web page
+// in a frame" tell the window has, because the shortcut is muscle memory.
+
+document.addEventListener('keydown', (event) => {
+  // ⌘W closes, ⌘M minimises. Both are window commands, not page commands, so
+  // they go to the shell rather than being handled here.
+  if (event.metaKey && !event.altKey && !event.ctrlKey) {
+    const key = event.key.toLowerCase();
+    if (key === 'w') {
+      event.preventDefault();
+      if (tauriWindow) tauriWindow.close();
+      return;
+    }
+    if (key === 'm') {
+      event.preventDefault();
+      if (tauriWindow) tauriWindow.minimize();
+      return;
+    }
+  }
+
+  if (event.key === 'Escape') {
+    event.preventDefault();
+    // Escape must always do something. It peels one layer at a time -- the
+    // most local dismissable thing first -- and closes the window only when
+    // there is nothing left to dismiss, which is what a native settings sheet
+    // does.
+    if (!$('changes').hidden) {
+      hideChanges();
+      $('btn-refresh').focus();
+      return;
+    }
+    if (!$('banner').hidden) {
+      clearError();
+      return;
+    }
+    // A field being edited gives up focus rather than closing the window, so
+    // Escape never discards a window's worth of typing in one keystroke.
+    const active = document.activeElement;
+    if (active && active.tagName === 'INPUT') {
+      active.blur();
+      return;
+    }
+    if (tauriWindow) tauriWindow.close();
+  }
+});
+
+// Return activates the default button, as it does in a sheet -- but not while
+// a button already has focus (that would double-fire) and not in the logs
+// window, which has no default action.
+document.addEventListener('keydown', (event) => {
+  if (event.key !== 'Enter' || event.metaKey) return;
+  if (currentView() === 'logs') return;
+  const active = document.activeElement;
+  if (active && (active.tagName === 'BUTTON' || active.tagName === 'SELECT')) {
+    return;
+  }
+  // The diff panel owns Return while it is open: applying is the action in
+  // front of the user, and saving underneath it would commit the wrong thing.
+  const panel = $('changes');
+  const target = panel.hidden ? $('btn-save') : panel.querySelector('button.default');
+  if (!target) return;
+  event.preventDefault();
+  target.click();
+});
+
+// WebKit's own context menu offers Reload and Inspect Element, neither of
+// which exists in a native app. There is no NSMenu to put here from inside the
+// webview, so the honest choice is no menu at all -- except over real text,
+// where the system's Copy/Look Up menu is the correct native behaviour.
+document.addEventListener('contextmenu', (event) => {
+  const target = event.target;
+  const editable =
+    target &&
+    (target.tagName === 'INPUT' ||
+      target.tagName === 'TEXTAREA' ||
+      target.closest('.logs, .fix-command, .banner, .notice-body'));
+  if (!editable) event.preventDefault();
+});
 
 applyView();
 // Both views need the profile list: the logs window uses it for the filter

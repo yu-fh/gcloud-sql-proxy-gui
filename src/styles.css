@@ -22,8 +22,15 @@
   --group-bg-hover: rgba(0, 0, 0, 0.03);
 
   --text: #000000;
-  --text-secondary: rgba(60, 60, 67, 0.6);
-  --text-tertiary: rgba(60, 60, 67, 0.3);
+  /* AppKit's own secondaryLabelColor is rgba(60,60,67,0.6), which measures
+     3.4:1 on the group white -- under WCAG AA's 4.5 for text this small. The
+     alpha is raised until it passes; the hue is Apple's, so this still reads
+     as the system's secondary grey rather than as plain black. */
+  --text-secondary: rgba(60, 60, 67, 0.75);
+  /* Same reasoning one step down. The tertiary colour carries the disclosure
+     chevron and the placeholder text, and at 0.3 the chevron measured 1.7:1 --
+     effectively invisible to anyone who needs contrast. */
+  --text-tertiary: rgba(60, 60, 67, 0.56);
 
   /* Separators are hairlines, not 1px borders: on a Retina display they land
      on a single device pixel. */
@@ -44,9 +51,17 @@
      fallback for engines that do not resolve it. */
   --accent: #0a69da;
   --accent: AccentColor;
+
+  /* NOT AccentColorText. WebKit resolves that keyword to black, which put
+     black text and a black status dot on the accent-filled selected row --
+     the worst contrast failure in the window, in both schemes. Every accent
+     macOS ships is dark enough to carry white, and a selected source-list row
+     in AppKit is always white-on-accent, so white is both correct and safe. */
   --accent-text: #ffffff;
-  --accent-text: AccentColorText;
-  --on-accent-secondary: rgba(255, 255, 255, 0.75);
+  /* Secondary text on the accent fill: the status and the chevron of a
+     selected row. At 0.75 alpha this measured 2.9:1 against the accent; 0.9
+     keeps it visibly secondary while clearing AA-large for 11px text. */
+  --on-accent-secondary: rgba(255, 255, 255, 0.9);
 
   --red: #d70015;
   --red-bg: rgba(215, 0, 21, 0.09);
@@ -68,7 +83,8 @@
 
     --text: #ffffff;
     --text-secondary: rgba(235, 235, 245, 0.6);
-    --text-tertiary: rgba(235, 235, 245, 0.3);
+    /* 0.3 measured 2.4:1 on the dark group; see the light block. */
+    --text-tertiary: rgba(235, 235, 245, 0.5);
 
     --separator: rgba(235, 235, 245, 0.18);
     --border: rgba(255, 255, 255, 0.16);
@@ -83,8 +99,8 @@
 
     --accent: #0a84ff;
     --accent: AccentColor;
+    /* See the light block: AccentColorText resolves to black here too. */
     --accent-text: #ffffff;
-    --accent-text: AccentColorText;
 
     --red: #ff453a;
     --red-bg: rgba(255, 69, 58, 0.16);
@@ -97,6 +113,40 @@
 
 * {
   box-sizing: border-box;
+}
+
+/* --- native input behaviour ----------------------------------------------
+   A webview defaults to browser behaviour: every label is selectable, every
+   word is force-touch-lookup-able, and the caret cursor follows the mouse
+   over static text. AppKit controls do none of that, and each one on its own
+   is enough to say "this is a web page". */
+
+* {
+  /* Chrome is not selectable. Content opts back in below. */
+  user-select: none;
+  -webkit-user-select: none;
+  /* No force-touch link previews or long-press callouts. */
+  -webkit-touch-callout: none;
+  /* The arrow cursor everywhere; fields re-assert the I-beam themselves. */
+  cursor: default;
+}
+
+/* The three places that hold real content rather than chrome: what the user
+   typed, what the backend said, and what the proxy logged. Selecting an error
+   message to paste into Slack is a thing people legitimately do. */
+input,
+textarea,
+.logs,
+.fix-command,
+.banner,
+.notice-body {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+input,
+textarea {
+  cursor: auto;
 }
 
 html,
@@ -417,13 +467,15 @@ body.logs-view .content {
   border-left-width: 0;
 }
 
-.gutter-button:disabled {
-  color: var(--text-tertiary);
-  background: var(--control-bg);
+/* The one control kind that *does* tint on hover. AppKit's borderless
+   source-list gutter buttons take a subtle background under the pointer, and
+   omitting it here would be as wrong as adding it to a push button. */
+.gutter-button:enabled:hover {
+  background: color-mix(in srgb, var(--control-bg) 92%, var(--text));
 }
 
-/* Hover feedback would promise an action a disabled control will not take. */
-.gutter-button:disabled:hover {
+.gutter-button:disabled {
+  color: var(--text-tertiary);
   background: var(--control-bg);
 }
 
@@ -536,6 +588,16 @@ body.logs-view .content {
   margin-left: auto;
 }
 
+/* No web spin buttons on the port fields. AppKit pairs a stepper with a field
+   only when it is a real NSStepper; WebKit's inner spin button is a browser
+   affordance and reads as one. */
+.row-input::-webkit-inner-spin-button,
+.row-input::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  appearance: none;
+  margin: 0;
+}
+
 .row-input::placeholder {
   color: var(--text-tertiary);
 }
@@ -573,9 +635,15 @@ button {
   box-shadow: 0 0.5px 1px rgba(0, 0, 0, 0.08);
 }
 
-button:hover {
-  background: color-mix(in srgb, var(--control-bg) 92%, var(--text));
-}
+/* No :hover on a plain push button.
+ *
+ * This is the checklist's precise rule and the one web styling always gets
+ * wrong: AppKit's rounded-bezel NSButton does not light up under the pointer.
+ * It has exactly two states a mouse can produce -- at rest and pressed. Adding
+ * a hover background to Revert/Refresh/Done makes them read as web buttons no
+ * matter how correct their metrics are. Borderless icon buttons *do* tint on
+ * hover (see .gutter-button below), which is why the treatment cannot be
+ * uniform: native varies it by control kind. */
 
 button:active {
   background: color-mix(in srgb, var(--control-bg) 84%, var(--text));
@@ -594,12 +662,13 @@ button.default {
   font-weight: 500;
 }
 
-button.default:hover {
-  background: color-mix(in srgb, var(--accent) 88%, black);
-}
-
 button.default:active {
   background: color-mix(in srgb, var(--accent) 78%, black);
+}
+
+/* A disabled control is not pressable, so it must not depress. */
+button:disabled:active {
+  background: var(--control-bg);
 }
 
 button.small {
@@ -824,6 +893,22 @@ button.small {
   line-height: 1.45;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+/* --- reduced motion -------------------------------------------------------
+   The only motion in the window is the switch knob sliding and its track
+   recolouring. AppKit honours this preference for free; a webview has to be
+   told. Last in the file so it wins over the transitions it cancels. */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 /* --- narrow window --------------------------------------------------------
