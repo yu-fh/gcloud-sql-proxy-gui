@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- Declare this an agent app so it never appears in the Dock or the app
+       switcher. main.rs also calls set_activation_policy(Accessory), but that
+       runs after launch, so without this key the Dock icon appears for a
+       moment and then vanishes. Declaring it here means it is never drawn. -->
+  <key>LSUIElement</key>
+  <true/>
+</dict>
+</plist>
