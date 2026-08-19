@@ -910,12 +910,18 @@ fn open_window<R: Runtime>(
     }
 }
 
-/// Record the window's geometry whenever it moves, resizes, or closes.
+/// Keep the window's geometry, and turn closing it into hiding it.
 ///
-/// Saving on close alone is not enough: these windows are closed by ⌘W and by
-/// the traffic light, and on macOS a window that is destroyed does not
-/// reliably report its final frame. Tracking the last-seen good geometry as it
-/// changes and writing that is what actually survives.
+/// Two jobs, both hanging off the same event stream.
+///
+/// Geometry: saving on close alone is not enough, because on macOS a window
+/// that is going away does not reliably report its final frame. Tracking the
+/// last-seen good geometry as it changes and writing that is what survives.
+///
+/// Closing: the app lives in the menu bar, so ⌘W and the red traffic light
+/// mean "put this away", not "quit". The close is prevented and the window
+/// hidden instead, which also keeps the webview alive so reopening is instant
+/// and does not discard scroll position or a half-typed field.
 fn remember_geometry_on_close<R: Runtime>(window: &tauri::WebviewWindow<R>, label: String) {
     let tracked: Arc<Mutex<Option<WindowGeometry>>> = Arc::new(Mutex::new(None));
 
@@ -946,7 +952,25 @@ fn remember_geometry_on_close<R: Runtime>(window: &tauri::WebviewWindow<R>, labe
                 }
             }
         }
-        tauri::WindowEvent::CloseRequested { .. } | tauri::WindowEvent::Destroyed => {
+        tauri::WindowEvent::CloseRequested { api, .. } => {
+            let geometry = seen.lock().ok().and_then(|slot| *slot);
+            if let Some(geometry) = geometry {
+                save_window_geometry(&label, geometry);
+            }
+
+            // Hide rather than destroy. The app lives in the menu bar, so
+            // closing a window means "put it away", not "quit" — the same
+            // thing the red button does in Tailscale or System Settings while
+            // the app keeps running. Destroying it would also throw away the
+            // webview, so the next `Profiles…` would pay a rebuild and lose
+            // scroll position and any half-typed field.
+            //
+            // `open_window` already prefers `show()` on an existing window, so
+            // a hidden window is what makes reopening instant.
+            api.prevent_close();
+            let _ = handle.hide();
+        }
+        tauri::WindowEvent::Destroyed => {
             let geometry = seen.lock().ok().and_then(|slot| *slot);
             if let Some(geometry) = geometry {
                 save_window_geometry(&label, geometry);

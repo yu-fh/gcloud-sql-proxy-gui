@@ -1016,13 +1016,19 @@ window.addEventListener('hashchange', applyView);
 // in a frame" tell the window has, because the shortcut is muscle memory.
 
 document.addEventListener('keydown', (event) => {
-  // ⌘W closes, ⌘M minimises. Both are window commands, not page commands, so
-  // they go to the shell rather than being handled here.
+  // ⌘W puts the window away, ⌘M minimises. Both are window commands, not page
+  // commands, so they go to the shell rather than being handled here.
+  //
+  // ⌘W hides rather than closes: the app lives in the menu bar, so a window is
+  // something you put away, not something whose closing means anything. Hiding
+  // also keeps the webview alive, so reopening from the tray is instant and
+  // does not lose scroll position or a half-typed field. (The Rust side turns
+  // the red traffic light into the same thing.)
   if (event.metaKey && !event.altKey && !event.ctrlKey) {
     const key = event.key.toLowerCase();
     if (key === 'w') {
       event.preventDefault();
-      if (tauriWindow) tauriWindow.close();
+      if (tauriWindow) tauriWindow.hide();
       return;
     }
     if (key === 'm') {
@@ -1035,7 +1041,7 @@ document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape') {
     event.preventDefault();
     // Escape must always do something. It peels one layer at a time -- the
-    // most local dismissable thing first -- and closes the window only when
+    // most local dismissable thing first -- and puts the window away only when
     // there is nothing left to dismiss, which is what a native settings sheet
     // does.
     if (!$('changes').hidden) {
@@ -1054,7 +1060,7 @@ document.addEventListener('keydown', (event) => {
       active.blur();
       return;
     }
-    if (tauriWindow) tauriWindow.close();
+    if (tauriWindow) tauriWindow.hide();
   }
 });
 
