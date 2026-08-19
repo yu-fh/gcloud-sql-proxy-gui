@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18"
+ viewBox="0 0 18 18" fill="none">
+  <g>
+    <!-- lower layer -->
+    <rect x="4.05" y="8.10" width="7.80" height="5.00" rx="1.25"
+      transform="rotate(-30 4.05 8.10)" fill="white" fill-opacity="0.38"/>
+    <rect x="4.35" y="7.60" width="7.80" height="5.00" rx="1.25"
+      transform="rotate(-30 4.35 7.60)" fill="none" stroke="white" stroke-opacity="0.22" stroke-width="0.45"/>
+    <!-- middle layer -->
+    <rect x="4.35" y="5.60" width="7.80" height="5.00" rx="1.25"
+      transform="rotate(-30 4.35 5.60)" fill="white" fill-opacity="0.52"/>
+    <rect x="4.65" y="5.10" width="7.80" height="5.00" rx="1.25"
+      transform="rotate(-30 4.65 5.10)" fill="none" stroke="white" stroke-opacity="0.28" stroke-width="0.45"/>
+    <!-- upper layer -->
+    <rect x="4.65" y="3.10" width="7.80" height="5.00" rx="1.25"
+      transform="rotate(-30 4.65 3.10)" fill="white" fill-opacity="0.66"/>
+    <rect x="4.95" y="2.60" width="7.80" height="5.00" rx="1.25"
+      transform="rotate(-30 4.95 2.60)" fill="none" stroke="white" stroke-opacity="0.34" stroke-width="0.45"/>
+    <circle cx="14.7" cy="14.1" r="2.05" fill="white"/><rect x="13.9" y="12.95" width="0.65" height="2.3" rx="0.22" fill="#6E6E73"/><rect x="14.85" y="12.95" width="0.65" height="2.3" rx="0.22" fill="#6E6E73"/>
+  </g>
+</svg>

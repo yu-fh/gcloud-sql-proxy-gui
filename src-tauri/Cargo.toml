@@ -26,5 +26,16 @@ serde_json = "1"
 thiserror = "2"
 dirs = "5"
 
+# The menu bar icon has to track the system appearance, and Tauri 2.11 exposes
+# no app-level way to read it: `theme()` and the `ThemeChanged` event both hang
+# off a `Window`, and this app is `LSUIElement` with no window at startup. So the
+# tray reads `NSApp.effectiveAppearance` directly — see `appearance()` in
+# `src/tray.rs`. Both crates are already in the tree via tao/wry; naming them
+# here makes the dependency explicit rather than relying on that.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSAppearance", "NSResponder"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSArray"] }
+
 [dev-dependencies]
 tempfile = "3"

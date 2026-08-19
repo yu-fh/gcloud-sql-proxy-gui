@@ -32,7 +32,7 @@
 //! the main thread, and a concurrent click handler can never be blocked on the
 //! poll loop for longer than a clone.
 //!
-//! # Four icons, by aggregate state
+//! # Four glyphs, by aggregate state
 //!
 //! The menu bar glyph is the only part of this UI visible without opening the
 //! menu, so it carries the aggregate state: `disconnected`, `connecting`,
@@ -49,9 +49,39 @@
 //! `icon_as_template(false)` is therefore load-bearing — as a template image
 //! macOS would flatten the whole thing to a black silhouette and throw away
 //! both the translucency and the red error dot, which is the entire point of
-//! the set. The cost is that macOS no longer inverts the glyph for a light
-//! menu bar or highlights it while the menu is open; the artwork is drawn
-//! light-on-transparent to survive both.
+//! the set.
+//!
+//! # Two ink sets, by system appearance
+//!
+//! Opting out of template rendering means opting out of the inversion macOS
+//! does for template images. The artwork is white, so on a light menu bar it is
+//! very nearly invisible — the red error dot is the only part that survives.
+//! The fix is a second set: the same geometry recoloured to dark ink, selected
+//! at runtime. Icon selection therefore has two independent dimensions —
+//! [`IconState`] (which glyph) and [`Appearance`] (which ink) — and eight
+//! embedded assets. Both sets come from `design/generate-icons.py`; the red
+//! error dot is exempt from the recolour and is byte-identical in both, because
+//! red reads on either background and is the one state whose colour carries
+//! meaning.
+//!
+//! The appearance is read from `NSApp.effectiveAppearance` rather than from
+//! Tauri, and it is *polled* rather than observed. Both are forced: Tauri 2.11
+//! exposes appearance only on a `Window` (`theme()`, and `ThemeChanged` inside
+//! `RunEvent::WindowEvent`), and this app is `LSUIElement` with no window at
+//! startup, so there is nothing to ask and no event to subscribe to. AppKit's
+//! own signal, `effectiveAppearanceDidChange`, is KVO — observing it from here
+//! would mean registering a custom `NSObject` subclass purely to forward a
+//! notification the existing once-a-second loop can just as well notice. See
+//! [`appearance`] for the read and [`update_icon`] for the change guard, which
+//! is over the (state, appearance) pair so a flip repaints once and records
+//! once rather than once per tick.
+//!
+//! `effectiveAppearance` is main-thread-only and the poll loop is not on the
+//! main thread, so the read is marshalled — see the threading note on
+//! [`appearance`]. Getting that wrong does not fail loudly: the off-thread read
+//! reports `Light` unconditionally, which on a dark menu bar installs the
+//! near-invisible dark-ink asset from the second tick onward, while startup
+//! looks perfectly correct.
 //!
 //! # Why polling
 //!
@@ -372,12 +402,135 @@ impl IconState {
     }
 }
 
+/// Which menu bar the icon is being drawn on, and therefore which ink it needs.
+///
+/// This is a second, independent dimension of icon selection: the state says
+/// *which* glyph, the appearance says *which ink*. Four states times two
+/// appearances is the eight embedded assets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Appearance {
+    /// A dark menu bar. The designer's artwork as delivered — white ink.
+    Dark,
+    /// A light menu bar. The derived variant — dark ink.
+    Light,
+}
+
+impl Appearance {
+    /// For the audit log.
+    fn as_str(self) -> &'static str {
+        match self {
+            Appearance::Dark => "dark",
+            Appearance::Light => "light",
+        }
+    }
+}
+
+/// The system appearance right now.
+///
+/// # Why this reads AppKit directly
+///
+/// Tauri 2.11 has no app-level appearance API. `theme()` and the
+/// `ThemeChanged` event both hang off a `Window`/`WebviewWindow`, and
+/// `RunEvent` has no appearance variant at all — the only `ThemeChanged` is
+/// nested inside `RunEvent::WindowEvent`. This app is `LSUIElement` with
+/// `ActivationPolicy::Accessory` and opens no window until the user asks for
+/// one, so at startup, and for most of its life, there is no window to ask.
+/// Routing the tray's ink through a hidden window created solely to be
+/// interrogated would be a heavier and more fragile thing than reading the
+/// value AppKit already holds.
+///
+/// So this is the same read tao performs for its own `Theme`:
+/// `NSApp.effectiveAppearance`, resolved with
+/// `bestMatchFromAppearancesWithNames:` against the two system appearance
+/// names. Matching that way rather than comparing the raw name is what makes
+/// the accessibility appearances work — `NSAppearanceNameAccessibilityHighContrastDarkAqua`
+/// is not equal to `NSAppearanceNameDarkAqua` but does best-match it, so a user
+/// on increased contrast gets the dark-menu-bar ink rather than silently
+/// falling through to the light branch.
+///
+/// # Threading
+///
+/// `NSApp.effectiveAppearance` is main-thread-only, and the poll loop is not on
+/// the main thread — it is a `tauri::async_runtime` task on a tokio worker. So
+/// the read is marshalled with [`AppHandle::run_on_main_thread`] and the result
+/// returned over a channel. Reading it directly from the calling thread is not
+/// a viable shortcut: `MainThreadMarker::new()` correctly refuses off-thread,
+/// and the resulting fallback silently reports `Light` on a dark menu bar,
+/// installing the near-invisible wrong-ink asset. That is a worse bug than the
+/// one this mechanism fixes, and it does not reproduce at startup — only from
+/// the second tick onward — so it survives any check that only looks at launch.
+///
+/// If the dispatch fails or the main thread does not answer, the previous known
+/// appearance is kept (see the `fallback` argument) rather than guessing:
+/// leaving a correct icon alone beats flipping it to a default.
+#[cfg(target_os = "macos")]
+fn appearance<R: Runtime>(app: &AppHandle<R>, fallback: Appearance) -> Appearance {
+    use std::sync::mpsc;
+
+    let (tx, rx) = mpsc::channel();
+    if app
+        .run_on_main_thread(move || {
+            let _ = tx.send(read_appearance());
+        })
+        .is_err()
+    {
+        return fallback;
+    }
+    // Bounded: a hung main thread must not stall the poll loop, which also
+    // drives the status line and the profile rows. One second is far longer
+    // than a property read and still under the poll interval.
+    rx.recv_timeout(Duration::from_secs(1)).unwrap_or(fallback)
+}
+
+/// The actual AppKit read. Must be called on the main thread; see
+/// [`appearance`], which is what arranges that.
+#[cfg(target_os = "macos")]
+fn read_appearance() -> Appearance {
+    use objc2_app_kit::NSApplication;
+    use objc2_foundation::{ns_string, MainThreadMarker, NSArray, NSString};
+
+    // `None` off the main thread. Callers get here only via
+    // `run_on_main_thread`, so this is a belt-and-braces guard rather than an
+    // expected path; `Light` matches the unknown-appearance default.
+    let Some(marker) = MainThreadMarker::new() else {
+        return Appearance::Light;
+    };
+
+    let names = NSArray::from_slice(&[
+        ns_string!("NSAppearanceNameAqua"),
+        ns_string!("NSAppearanceNameDarkAqua"),
+    ]);
+    let appearance = NSApplication::sharedApplication(marker).effectiveAppearance();
+    let matched: Option<objc2::rc::Retained<NSString>> =
+        appearance.bestMatchFromAppearancesWithNames(&names);
+
+    match matched.as_deref().map(NSString::to_string).as_deref() {
+        Some("NSAppearanceNameDarkAqua") => Appearance::Dark,
+        _ => Appearance::Light,
+    }
+}
+
+/// Non-macOS builds have no menu bar appearance to track. The tray code is
+/// cross-platform enough to compile, and `Dark` keeps the designer's artwork as
+/// delivered rather than substituting a derived variant on a platform nobody has
+/// looked at the icon on.
+#[cfg(not(target_os = "macos"))]
+fn appearance<R: Runtime>(_app: &AppHandle<R>, _fallback: Appearance) -> Appearance {
+    Appearance::Dark
+}
+
 /// The menu bar icons, embedded rather than read from disk: a dev run and an
 /// installed bundle resolve resource paths differently, and an icon that
 /// silently fails to load leaves an invisible tray.
 ///
 /// These are colour assets, not template images — see the module docs on why
-/// `icon_as_template(false)` is load-bearing for this artwork.
+/// `icon_as_template(false)` is load-bearing for this artwork, and why that in
+/// turn is what forces two sets rather than one.
+///
+/// Eight assets: four states times two menu bar appearances. Both sets are
+/// generated by `design/generate-icons.py` from the committed sources in
+/// `design/tray-source/`; the dark-menu-bar set is the designer's delivery
+/// copied verbatim, the light-menu-bar set is its mechanical recolour.
 ///
 /// **These are the 18px assets, not the 36px `@2x` ones,** and that is the one
 /// choice here most likely to ship a visibly broken icon if reversed. The
@@ -391,23 +544,46 @@ impl IconState {
 /// 24px and 48px variants are omitted for the same reason: nothing here can
 /// use them, and an unused asset in the tree is an invitation to wire up the
 /// wrong one.
+/// The dark-menu-bar set: the designer's artwork as delivered, white ink.
 const TRAY_ICON_DISCONNECTED: &[u8] = include_bytes!("../icons/tray-disconnected.png");
 const TRAY_ICON_CONNECTING: &[u8] = include_bytes!("../icons/tray-connecting.png");
 const TRAY_ICON_CONNECTED: &[u8] = include_bytes!("../icons/tray-connected.png");
 const TRAY_ICON_ERROR: &[u8] = include_bytes!("../icons/tray-error.png");
 
-/// Decode the icon for an aggregate state.
+/// The light-menu-bar set: the same artwork recoloured to dark ink by
+/// `design/generate-icons.py`. Same geometry, same red error dot — only the ink
+/// and its alpha differ. See that script for how the ink was chosen.
+const TRAY_ICON_DISCONNECTED_LIGHT: &[u8] = include_bytes!("../icons/tray-disconnected-light.png");
+const TRAY_ICON_CONNECTING_LIGHT: &[u8] = include_bytes!("../icons/tray-connecting-light.png");
+const TRAY_ICON_CONNECTED_LIGHT: &[u8] = include_bytes!("../icons/tray-connected-light.png");
+const TRAY_ICON_ERROR_LIGHT: &[u8] = include_bytes!("../icons/tray-error-light.png");
+
+/// The embedded bytes for one (state, appearance) pair.
+///
+/// Split out from [`tray_icon`] so the mapping can be tested without a Tauri
+/// runtime: the tests walk all eight pairs and assert both that each decodes to
+/// 18x18 and that no two pairs share an asset. A copy-paste slip that pointed
+/// two states at one image would otherwise be invisible — the tray still shows
+/// *an* icon.
+fn tray_icon_bytes(state: IconState, appearance: Appearance) -> &'static [u8] {
+    match (state, appearance) {
+        (IconState::Disconnected, Appearance::Dark) => TRAY_ICON_DISCONNECTED,
+        (IconState::Connecting, Appearance::Dark) => TRAY_ICON_CONNECTING,
+        (IconState::Connected, Appearance::Dark) => TRAY_ICON_CONNECTED,
+        (IconState::Error, Appearance::Dark) => TRAY_ICON_ERROR,
+        (IconState::Disconnected, Appearance::Light) => TRAY_ICON_DISCONNECTED_LIGHT,
+        (IconState::Connecting, Appearance::Light) => TRAY_ICON_CONNECTING_LIGHT,
+        (IconState::Connected, Appearance::Light) => TRAY_ICON_CONNECTED_LIGHT,
+        (IconState::Error, Appearance::Light) => TRAY_ICON_ERROR_LIGHT,
+    }
+}
+
+/// Decode the icon for an aggregate state on a given menu bar appearance.
 ///
 /// Returns `None` only if the embedded PNG fails to decode, which would mean a
 /// corrupt build; callers fall back to a text title so the tray stays clickable.
-fn tray_icon(state: IconState) -> Option<tauri::image::Image<'static>> {
-    let bytes = match state {
-        IconState::Disconnected => TRAY_ICON_DISCONNECTED,
-        IconState::Connecting => TRAY_ICON_CONNECTING,
-        IconState::Connected => TRAY_ICON_CONNECTED,
-        IconState::Error => TRAY_ICON_ERROR,
-    };
-    tauri::image::Image::from_bytes(bytes).ok()
+fn tray_icon(state: IconState, appearance: Appearance) -> Option<tauri::image::Image<'static>> {
+    tauri::image::Image::from_bytes(tray_icon_bytes(state, appearance)).ok()
 }
 
 /// The identity of the profile set a menu was built from: the ids, in order.
@@ -463,7 +639,19 @@ pub fn build<R: Runtime>(app: &tauri::App<R>, state: &SharedState) -> tauri::Res
     // A tray with no icon is invisible, which would look exactly like the app
     // failing to launch, so fall back to a text title rather than a silent
     // no-op if the embedded image somehow fails to decode.
-    match tray_icon(initial.icon_state()) {
+    // Read the appearance once here and hand the same value to the poll loop as
+    // its seed, so the first tick does not rewrite an already-correct icon.
+    //
+    // `read_appearance` directly rather than `appearance`: this runs inside
+    // `setup`, which is already the main thread *and* is before `app.run` starts
+    // the event loop. `run_on_main_thread` only queues onto that loop, so going
+    // through it here would wait for a runner that has not started yet and fall
+    // back on the timeout.
+    #[cfg(target_os = "macos")]
+    let initial_appearance = read_appearance();
+    #[cfg(not(target_os = "macos"))]
+    let initial_appearance = Appearance::Dark;
+    match tray_icon(initial.icon_state(), initial_appearance) {
         Some(icon) => tray = tray.icon(icon),
         None => tray = tray.title("SQL"),
     }
@@ -499,46 +687,80 @@ pub fn build<R: Runtime>(app: &tauri::App<R>, state: &SharedState) -> tauri::Res
         autostart,
         handles,
         initial_ids,
-        initial.icon_state(),
+        (initial.icon_state(), initial_appearance),
     );
 
     Ok(())
 }
 
-/// Point the tray icon at the snapshot's aggregate state, if that is not
-/// already where it points.
+/// Point the tray icon at the snapshot's aggregate state and the current menu
+/// bar appearance, if that is not already where it points.
 ///
 /// The icon is the only signal visible without opening the menu, so it tracks
 /// the aggregate state — but only on change. `set_icon` goes through to the OS,
 /// and rewriting the same image once a second is churn for no benefit; the same
 /// reason applies to the audit record, which is why it is written here (on a
-/// real transition) rather than per poll tick. `last_icon` only advances when
-/// the write succeeds, so a transient failure is retried next tick instead of
-/// being recorded as done.
+/// real transition) rather than per poll tick. `last` only advances when the
+/// write succeeds, so a transient failure is retried next tick instead of being
+/// recorded as done.
 ///
-/// Called from both poll-loop paths: the menu-rebuild path returns early via
-/// `continue` and would otherwise leave the icon stale.
+/// The guard is over the *pair*, not the state alone. Appearance is the second
+/// input to icon selection, and a user flipping Light/Dark in System Settings
+/// changes which asset is correct without changing the state — so keying the
+/// early return on state only would leave the wrong-ink icon installed until
+/// the next unrelated status change, which is the original invisible-icon bug
+/// with extra steps. Reading the appearance every tick is a cheap AppKit
+/// property read; it is the *write* and the audit record that are gated, so a
+/// flip costs exactly one record rather than one per tick.
 fn update_icon<R: Runtime>(
     app: &AppHandle<R>,
     state: &SharedState,
     snapshot: &Snapshot,
-    last_icon: &mut Option<IconState>,
+    last: &mut Option<(IconState, Appearance)>,
 ) {
-    let next = snapshot.icon_state();
-    if *last_icon == Some(next) {
+    // Keep the current appearance if it cannot be read, rather than letting a
+    // failed read masquerade as a flip and repaint the icon wrongly.
+    let current_appearance = last.map_or(Appearance::Dark, |(_, was)| was);
+    let next = (snapshot.icon_state(), appearance(app, current_appearance));
+    if *last == Some(next) {
         return;
     }
-    let Some((tray, icon)) = app.tray_by_id(TRAY_ID).zip(tray_icon(next)) else {
+    let Some((tray, icon)) = app.tray_by_id(TRAY_ID).zip(tray_icon(next.0, next.1)) else {
         return;
     };
     if tray.set_icon(Some(icon)).is_ok() {
-        let from = last_icon.map_or("unknown", IconState::as_str);
-        state.audit.info(
-            Category::Event,
-            None,
-            format!("tray icon: {from} -> {}", next.as_str()),
-        );
-        *last_icon = Some(next);
+        // Report whichever dimension actually moved. A status change and an
+        // appearance flip are different events to anyone reading the log, and
+        // collapsing both into one "state/appearance" line would make the
+        // common case (a status change) noisier for no gain.
+        let message = match *last {
+            Some((from_state, from_appearance)) if from_state == next.0 => format!(
+                "tray icon appearance: {} -> {} ({})",
+                from_appearance.as_str(),
+                next.1.as_str(),
+                next.0.as_str()
+            ),
+            Some((from_state, from_appearance)) if from_appearance == next.1 => format!(
+                "tray icon: {} -> {} ({} menu bar)",
+                from_state.as_str(),
+                next.0.as_str(),
+                next.1.as_str()
+            ),
+            Some((from_state, from_appearance)) => format!(
+                "tray icon: {} ({}) -> {} ({})",
+                from_state.as_str(),
+                from_appearance.as_str(),
+                next.0.as_str(),
+                next.1.as_str()
+            ),
+            None => format!(
+                "tray icon: unknown -> {} ({} menu bar)",
+                next.0.as_str(),
+                next.1.as_str()
+            ),
+        };
+        state.audit.info(Category::Event, None, message);
+        *last = Some(next);
     }
 }
 
@@ -564,15 +786,15 @@ fn spawn_poll_loop<R: Runtime>(
     autostart: CheckMenuItem<R>,
     handles: MenuHandles<R>,
     initial_ids: Vec<String>,
-    initial_icon: IconState,
+    initial_icon: (IconState, Appearance),
 ) {
     tauri::async_runtime::spawn(async move {
         let mut handles = handles;
         let mut known_ids = initial_ids;
         let mut last_status = String::new();
-        // Seeded from the state the tray was built with, so the first tick
-        // does not redundantly rewrite an already-correct icon.
-        let mut last_icon: Option<IconState> = Some(initial_icon);
+        // Seeded from the state *and appearance* the tray was built with, so the
+        // first tick does not redundantly rewrite an already-correct icon.
+        let mut last_icon: Option<(IconState, Appearance)> = Some(initial_icon);
         let mut last_labels: Vec<String> = vec![String::new(); handles.profile_items.len()];
         let mut last_checked: Vec<Option<bool>> = vec![None; handles.profile_items.len()];
 
@@ -626,7 +848,11 @@ fn spawn_poll_loop<R: Runtime>(
                 if let Some(new_handles) = rebuilt {
                     last_status = snapshot.status_line();
                     last_labels = snapshot.rows.iter().map(|row| row.label()).collect();
-                    last_checked = snapshot.rows.iter().map(|row| Some(row.checked())).collect();
+                    last_checked = snapshot
+                        .rows
+                        .iter()
+                        .map(|row| Some(row.checked()))
+                        .collect();
                     handles = new_handles;
                     known_ids = ids;
 
@@ -857,11 +1083,7 @@ fn autostart_enabled<R: Runtime>(app: &AppHandle<R>) -> bool {
 /// so it has to be forced back to whatever the OS actually reports afterwards
 /// — otherwise a failed `enable` leaves a ticked box claiming a registration
 /// that does not exist.
-fn toggle_autostart<R: Runtime>(
-    app: &AppHandle<R>,
-    item: &CheckMenuItem<R>,
-    state: &SharedState,
-) {
+fn toggle_autostart<R: Runtime>(app: &AppHandle<R>, item: &CheckMenuItem<R>, state: &SharedState) {
     use tauri_plugin_autostart::ManagerExt;
 
     let autolaunch = app.autolaunch();
@@ -1001,46 +1223,9 @@ mod tests {
         assert_eq!(snapshot.icon_state(), IconState::Connecting);
     }
 
-    #[test]
-    fn every_tray_icon_decodes_at_the_intended_size() {
-        // A corrupt embedded PNG would leave the tray invisible, which looks
-        // exactly like the app failing to launch. Dimensions are asserted, not
-        // just decodability: these must be the 18px assets, because
-        // `Image::from_bytes` hands the declared pixel size straight to the
-        // ~22pt menu bar slot and a 36px asset fills it as a solid block.
-        for state in [
-            IconState::Disconnected,
-            IconState::Connecting,
-            IconState::Connected,
-            IconState::Error,
-        ] {
-            let icon = tray_icon(state)
-                .unwrap_or_else(|| panic!("{} icon failed to decode", state.as_str()));
-            assert_eq!(
-                (icon.width(), icon.height()),
-                (18, 18),
-                "{} icon is not 18x18",
-                state.as_str()
-            );
-        }
-    }
-
-    #[test]
-    fn each_state_maps_to_a_distinct_asset() {
-        // Four states are pointless if two of them are the same picture; a
-        // copy-paste in the constant table would be invisible otherwise.
-        let all = [
-            TRAY_ICON_DISCONNECTED,
-            TRAY_ICON_CONNECTING,
-            TRAY_ICON_CONNECTED,
-            TRAY_ICON_ERROR,
-        ];
-        for (i, a) in all.iter().enumerate() {
-            for b in all.iter().skip(i + 1) {
-                assert_ne!(a, b, "two icon states share the same asset bytes");
-            }
-        }
-    }
+    // The per-asset checks (decodes, 18x18, all eight distinct) live at the
+    // bottom of this module with `ALL_PAIRS`, so they cover the appearance
+    // dimension as well as the state one.
 
     #[test]
     fn identical_profile_sets_need_no_rebuild() {
@@ -1185,6 +1370,134 @@ mod tests {
         // those menu items.
         for reserved in [ID_QUIT, ID_LOGS, ID_PROFILES, ID_AUTOSTART, ID_STATUS] {
             assert_ne!(format!("{PROFILE_PREFIX}{reserved}"), reserved);
+        }
+    }
+
+    /// Every (state, appearance) pair the tray can ask for.
+    const ALL_PAIRS: [(IconState, Appearance); 8] = [
+        (IconState::Disconnected, Appearance::Dark),
+        (IconState::Connecting, Appearance::Dark),
+        (IconState::Connected, Appearance::Dark),
+        (IconState::Error, Appearance::Dark),
+        (IconState::Disconnected, Appearance::Light),
+        (IconState::Connecting, Appearance::Light),
+        (IconState::Connected, Appearance::Light),
+        (IconState::Error, Appearance::Light),
+    ];
+
+    /// Read a PNG's declared dimensions straight out of its IHDR chunk.
+    ///
+    /// Deliberately not via `Image::from_bytes`: that needs no runtime here, but
+    /// going to the bytes checks the number the menu bar will actually act on
+    /// rather than whatever a decoder chose to hand back.
+    fn png_dimensions(bytes: &[u8]) -> (u32, u32) {
+        assert_eq!(&bytes[1..4], b"PNG", "not a PNG");
+        let width = u32::from_be_bytes(bytes[16..20].try_into().unwrap());
+        let height = u32::from_be_bytes(bytes[20..24].try_into().unwrap());
+        (width, height)
+    }
+
+    #[test]
+    fn every_tray_asset_is_exactly_18x18() {
+        // The size the menu bar takes at face value. A 36px asset -- the `@2x`
+        // variant the designer's README suggests -- fills the ~22pt slot and
+        // renders as a solid block; a previous iteration shipped that bug with a
+        // 44px asset. See the comment on the `include_bytes!` block.
+        for (state, appearance) in ALL_PAIRS {
+            let bytes = tray_icon_bytes(state, appearance);
+            assert_eq!(
+                png_dimensions(bytes),
+                (18, 18),
+                "{} / {} is not 18x18",
+                state.as_str(),
+                appearance.as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn every_tray_asset_decodes_at_18x18() {
+        // A corrupt embed would leave the tray falling back to a text title,
+        // which is a silent degradation nobody would notice in review. The
+        // dimensions are re-checked here on the *decoded* image rather than the
+        // header, because `Image::from_bytes` is what actually feeds the menu
+        // bar and it is its notion of the size that governs.
+        for (state, appearance) in ALL_PAIRS {
+            let icon = tray_icon(state, appearance).unwrap_or_else(|| {
+                panic!(
+                    "{} / {} failed to decode",
+                    state.as_str(),
+                    appearance.as_str()
+                )
+            });
+            assert_eq!(
+                (icon.width(), icon.height()),
+                (18, 18),
+                "decoded {} / {} is not 18x18",
+                state.as_str(),
+                appearance.as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn no_two_state_appearance_pairs_share_an_asset() {
+        // A copy-paste slip in `tray_icon_bytes` that pointed two pairs at one
+        // image is otherwise invisible: the tray still shows *an* icon, just the
+        // wrong one, and only for whichever state nobody was watching.
+        for (i, &(state, appearance)) in ALL_PAIRS.iter().enumerate() {
+            for &(other_state, other_appearance) in &ALL_PAIRS[i + 1..] {
+                assert_ne!(
+                    tray_icon_bytes(state, appearance),
+                    tray_icon_bytes(other_state, other_appearance),
+                    "{} / {} and {} / {} are the same asset",
+                    state.as_str(),
+                    appearance.as_str(),
+                    other_state.as_str(),
+                    other_appearance.as_str()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_two_appearances_of_a_state_differ_from_each_other() {
+        // Subsumed by the pairwise check above, but stated on its own because it
+        // is the specific failure this feature exists to prevent: if the light
+        // variant were accidentally the dark bytes, the icon would be invisible
+        // on a light menu bar exactly as before, and every other test would
+        // still pass.
+        for state in [
+            IconState::Disconnected,
+            IconState::Connecting,
+            IconState::Connected,
+            IconState::Error,
+        ] {
+            assert_ne!(
+                tray_icon_bytes(state, Appearance::Dark),
+                tray_icon_bytes(state, Appearance::Light),
+                "{} has the same asset for both appearances",
+                state.as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn state_and_appearance_names_are_distinct_for_the_audit_log() {
+        // The audit log distinguishes a status change from an appearance flip by
+        // these names, so a collision would make the log ambiguous.
+        assert_ne!(Appearance::Dark.as_str(), Appearance::Light.as_str());
+        let states = [
+            IconState::Disconnected.as_str(),
+            IconState::Connecting.as_str(),
+            IconState::Connected.as_str(),
+            IconState::Error.as_str(),
+        ];
+        for (i, name) in states.iter().enumerate() {
+            assert!(
+                !states[i + 1..].contains(name),
+                "duplicate state name {name}"
+            );
         }
     }
 }
