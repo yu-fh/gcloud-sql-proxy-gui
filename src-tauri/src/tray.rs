@@ -32,16 +32,26 @@
 //! the main thread, and a concurrent click handler can never be blocked on the
 //! poll loop for longer than a clone.
 //!
-//! # One icon, not four
+//! # Four icons, by aggregate state
 //!
-//! The tray keeps a single icon; aggregate state is carried by the status line
-//! at the top of the menu and the per-profile suffixes, not by the glyph in
-//! the menu bar. Four icon variants would mean four hand-drawn assets that a
-//! designer has not been asked for, and getting them wrong (a colour that
-//! vanishes against a dark menu bar, say) is worse than not having them. The
-//! menu is one click away and says more than a colour could. If distinct
-//! icons are wanted later, `TrayIcon::set_icon` is the hook and the poll loop
-//! is where the call belongs.
+//! The menu bar glyph is the only part of this UI visible without opening the
+//! menu, so it carries the aggregate state: `disconnected`, `connecting`,
+//! `connected`, `error`. The status line and the per-profile suffixes still
+//! carry the detail — which profile, which port, which failure — because a
+//! single glyph cannot say "dev is up, prd failed".
+//!
+//! One glyph has to stand for many profiles, so the four states are a strict
+//! precedence rather than a tally; see [`Snapshot::icon_state`] for the order
+//! and why failure outranks success.
+//!
+//! These are designer-supplied colour assets, *not* template images: a
+//! translucent database glyph with a status dot whose colour is the signal.
+//! `icon_as_template(false)` is therefore load-bearing — as a template image
+//! macOS would flatten the whole thing to a black silhouette and throw away
+//! both the translucency and the red error dot, which is the entire point of
+//! the set. The cost is that macOS no longer inverts the glyph for a light
+//! menu bar or highlights it while the menu is open; the artwork is drawn
+//! light-on-transparent to survive both.
 //!
 //! # Why polling
 //!
@@ -154,16 +164,47 @@ struct Snapshot {
 }
 
 impl Snapshot {
-    /// Whether the menu bar icon should show its connected state.
+    /// Which of the four menu bar icons the aggregate state calls for.
     ///
-    /// `Starting` counts: the proxy is up and the port is bound, and a filled
-    /// icon that appears the moment you click is better feedback than one that
-    /// waits a second for the ready line. `Failed` deliberately does not —
-    /// nothing is listening, so showing "connected" would be a lie.
-    fn any_active(&self) -> bool {
-        self.rows
-            .iter()
-            .any(|r| matches!(r.status, ProxyStatus::Running | ProxyStatus::Starting))
+    /// One glyph, many profiles, so this is a precedence and not a tally. In
+    /// descending order:
+    ///
+    /// 1. **any `Failed` → `Error`.** A failure the user has not seen yet is
+    ///    the only state here that needs them to *do* something, and the menu
+    ///    bar is the only place it can be raised unprompted. If dev is running
+    ///    and prd failed, reporting "connected" would hide the one fact worth
+    ///    surfacing; the menu one click away still shows dev up and prd
+    ///    failed, so nothing is lost by ranking the failure first.
+    /// 2. **else any `Starting` → `Connecting`.** Carried over from the old
+    ///    two-state icon: `Starting` must move the glyph the instant you
+    ///    click, not a second later when the ready line lands. It ranks below
+    ///    `Failed` because a start in flight is not news.
+    /// 3. **else any `Running` → `Connected`.**
+    /// 4. **else (all `Stopped`) → `Disconnected`.** Also the empty-profile
+    ///    case: nothing configured is nothing connected.
+    ///
+    /// Note that `Failed` never reads as connected, and `Starting` never reads
+    /// as disconnected — the two invariants the two-state icon encoded.
+    fn icon_state(&self) -> IconState {
+        let mut starting = false;
+        let mut running = false;
+        for row in &self.rows {
+            match row.status {
+                // Highest precedence: return as soon as one is found, so no
+                // later row can talk us out of reporting the failure.
+                ProxyStatus::Failed(_) => return IconState::Error,
+                ProxyStatus::Starting => starting = true,
+                ProxyStatus::Running => running = true,
+                ProxyStatus::Stopped => {}
+            }
+        }
+        if starting {
+            IconState::Connecting
+        } else if running {
+            IconState::Connected
+        } else {
+            IconState::Disconnected
+        }
     }
 
     /// The disabled line at the top of the menu: what is running, and where.
@@ -302,31 +343,69 @@ fn build_menu<R: Runtime>(
     ))
 }
 
+/// The aggregate state the menu bar glyph shows. One variant per embedded
+/// asset; see [`Snapshot::icon_state`] for how a set of profiles maps onto it.
+///
+/// The designer's set also includes a `paused` state. It is deliberately not
+/// represented here and its asset is not in the repo: the app has no pause
+/// concept — a profile is `Stopped`, `Starting`, `Running`, or `Failed`, with
+/// no way to reach anything a user would call paused — so a `Paused` variant
+/// would be unreachable code and an embedded asset would be dead weight. If a
+/// pause feature ever lands, `paused-18px.png` is in the designer's delivery.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum IconState {
+    Disconnected,
+    Connecting,
+    Connected,
+    Error,
+}
+
+impl IconState {
+    /// For the audit log: the state name as the designer's assets name it.
+    fn as_str(self) -> &'static str {
+        match self {
+            IconState::Disconnected => "disconnected",
+            IconState::Connecting => "connecting",
+            IconState::Connected => "connected",
+            IconState::Error => "error",
+        }
+    }
+}
+
 /// The menu bar icons, embedded rather than read from disk: a dev run and an
 /// installed bundle resolve resource paths differently, and an icon that
 /// silently fails to load leaves an invisible tray.
 ///
-/// Both are template images: pure black on transparent, so macOS handles
-/// light/dark inversion and the menu-open highlight. On a dark menu bar the
-/// system renders them white — that is the mechanism working, not a bug.
+/// These are colour assets, not template images — see the module docs on why
+/// `icon_as_template(false)` is load-bearing for this artwork.
 ///
-/// These are the 22px assets, not the `@2x` ones. `Image::from_bytes` knows
-/// nothing about the `@2x` filename convention: it sees whatever pixel
-/// dimensions the PNG declares and hands them to the menu bar at face value,
-/// so a 44px image fills the 22pt slot edge to edge and reads as a solid
-/// block rather than a mark.
-const TRAY_ICON_IDLE: &[u8] = include_bytes!("../icons/trayTemplate.png");
-const TRAY_ICON_ACTIVE: &[u8] = include_bytes!("../icons/trayActiveTemplate.png");
+/// **These are the 18px assets, not the 36px `@2x` ones,** and that is the one
+/// choice here most likely to ship a visibly broken icon if reversed. The
+/// designer's README recommends 18px for 1x and 36px for @2x, but that pairing
+/// only means anything to an API that takes both and picks per display.
+/// `Image::from_bytes` is not that API: it knows nothing about `@2x`, reads
+/// whatever pixel dimensions the PNG declares, and hands them to the menu bar
+/// at face value. A 36px image therefore fills the ~22pt slot edge to edge and
+/// reads as a solid block rather than a mark — exactly the bug the previous
+/// icon set hit by embedding its 44px variant instead of its 22px one. The
+/// 24px and 48px variants are omitted for the same reason: nothing here can
+/// use them, and an unused asset in the tree is an invitation to wire up the
+/// wrong one.
+const TRAY_ICON_DISCONNECTED: &[u8] = include_bytes!("../icons/tray-disconnected.png");
+const TRAY_ICON_CONNECTING: &[u8] = include_bytes!("../icons/tray-connecting.png");
+const TRAY_ICON_CONNECTED: &[u8] = include_bytes!("../icons/tray-connected.png");
+const TRAY_ICON_ERROR: &[u8] = include_bytes!("../icons/tray-error.png");
 
-/// Decode the icon for the given connected state.
+/// Decode the icon for an aggregate state.
 ///
 /// Returns `None` only if the embedded PNG fails to decode, which would mean a
 /// corrupt build; callers fall back to a text title so the tray stays clickable.
-fn tray_icon(active: bool) -> Option<tauri::image::Image<'static>> {
-    let bytes = if active {
-        TRAY_ICON_ACTIVE
-    } else {
-        TRAY_ICON_IDLE
+fn tray_icon(state: IconState) -> Option<tauri::image::Image<'static>> {
+    let bytes = match state {
+        IconState::Disconnected => TRAY_ICON_DISCONNECTED,
+        IconState::Connecting => TRAY_ICON_CONNECTING,
+        IconState::Connected => TRAY_ICON_CONNECTED,
+        IconState::Error => TRAY_ICON_ERROR,
     };
     tauri::image::Image::from_bytes(bytes).ok()
 }
@@ -384,15 +463,17 @@ pub fn build<R: Runtime>(app: &tauri::App<R>, state: &SharedState) -> tauri::Res
     // A tray with no icon is invisible, which would look exactly like the app
     // failing to launch, so fall back to a text title rather than a silent
     // no-op if the embedded image somehow fails to decode.
-    match tray_icon(initial.any_active()) {
+    match tray_icon(initial.icon_state()) {
         Some(icon) => tray = tray.icon(icon),
         None => tray = tray.title("SQL"),
     }
     tray
-        // These are template images: pure black on transparent. macOS inverts
-        // them for light and dark menu bars and for the highlighted state
-        // while the menu is open, which a colour icon would not get.
-        .icon_as_template(true)
+        // NOT a template image. These are colour assets: a translucent glyph
+        // with a status dot whose colour is the signal. As a template macOS
+        // would flatten every pixel to a black silhouette, discarding both the
+        // translucency and the red error dot — so `true` here would silently
+        // destroy the thing the four-state set exists to show.
+        .icon_as_template(false)
         .tooltip("Cloud SQL Proxy")
         .menu(&menu)
         // Without this, left-clicking a macOS tray icon does nothing visible
@@ -418,10 +499,47 @@ pub fn build<R: Runtime>(app: &tauri::App<R>, state: &SharedState) -> tauri::Res
         autostart,
         handles,
         initial_ids,
-        initial.any_active(),
+        initial.icon_state(),
     );
 
     Ok(())
+}
+
+/// Point the tray icon at the snapshot's aggregate state, if that is not
+/// already where it points.
+///
+/// The icon is the only signal visible without opening the menu, so it tracks
+/// the aggregate state — but only on change. `set_icon` goes through to the OS,
+/// and rewriting the same image once a second is churn for no benefit; the same
+/// reason applies to the audit record, which is why it is written here (on a
+/// real transition) rather than per poll tick. `last_icon` only advances when
+/// the write succeeds, so a transient failure is retried next tick instead of
+/// being recorded as done.
+///
+/// Called from both poll-loop paths: the menu-rebuild path returns early via
+/// `continue` and would otherwise leave the icon stale.
+fn update_icon<R: Runtime>(
+    app: &AppHandle<R>,
+    state: &SharedState,
+    snapshot: &Snapshot,
+    last_icon: &mut Option<IconState>,
+) {
+    let next = snapshot.icon_state();
+    if *last_icon == Some(next) {
+        return;
+    }
+    let Some((tray, icon)) = app.tray_by_id(TRAY_ID).zip(tray_icon(next)) else {
+        return;
+    };
+    if tray.set_icon(Some(icon)).is_ok() {
+        let from = last_icon.map_or("unknown", IconState::as_str);
+        state.audit.info(
+            Category::Event,
+            None,
+            format!("tray icon: {from} -> {}", next.as_str()),
+        );
+        *last_icon = Some(next);
+    }
 }
 
 /// Keep the status line and the profile rows in step with live status, and the
@@ -437,13 +555,16 @@ pub fn build<R: Runtime>(app: &tauri::App<R>, state: &SharedState) -> tauri::Res
 ///   window): rebuild the menu, hand it to the tray, and adopt the new handles.
 ///   Without this an added profile would never render and a deleted one would
 ///   leave a row that clicks through to `no profile with id '…'`.
+///
+/// Either way the icon is refreshed through [`update_icon`], including on the
+/// rebuild path — which returns early and would otherwise leave it stale.
 fn spawn_poll_loop<R: Runtime>(
     app: AppHandle<R>,
     state: SharedState,
     autostart: CheckMenuItem<R>,
     handles: MenuHandles<R>,
     initial_ids: Vec<String>,
-    initial_active: bool,
+    initial_icon: IconState,
 ) {
     tauri::async_runtime::spawn(async move {
         let mut handles = handles;
@@ -451,7 +572,7 @@ fn spawn_poll_loop<R: Runtime>(
         let mut last_status = String::new();
         // Seeded from the state the tray was built with, so the first tick
         // does not redundantly rewrite an already-correct icon.
-        let mut last_active: Option<bool> = Some(initial_active);
+        let mut last_icon: Option<IconState> = Some(initial_icon);
         let mut last_labels: Vec<String> = vec![String::new(); handles.profile_items.len()];
         let mut last_checked: Vec<Option<bool>> = vec![None; handles.profile_items.len()];
 
@@ -509,21 +630,12 @@ fn spawn_poll_loop<R: Runtime>(
                     handles = new_handles;
                     known_ids = ids;
 
-                    // A set change can also change whether anything is
-                    // connected — deleting the only running profile is exactly
-                    // that — and the `continue` below skips the icon update
-                    // further down, so it has to happen here or the icon stays
-                    // stale until some later status change happens to move it.
-                    let active = snapshot.any_active();
-                    if last_active != Some(active) {
-                        if let (Some(tray), Some(icon)) =
-                            (app.tray_by_id(TRAY_ID), tray_icon(active))
-                        {
-                            if tray.set_icon(Some(icon)).is_ok() {
-                                last_active = Some(active);
-                            }
-                        }
-                    }
+                    // A set change can also change the aggregate state —
+                    // deleting the only running profile is exactly that — and
+                    // the `continue` below skips the icon update further down,
+                    // so it has to happen here or the icon stays stale until
+                    // some later status change happens to move it.
+                    update_icon(&app, &state, &snapshot, &mut last_icon);
 
                     // The freshly built items already carry this snapshot's
                     // text and checked state, so there is nothing left to
@@ -541,18 +653,7 @@ fn spawn_poll_loop<R: Runtime>(
                 last_status = status_line;
             }
 
-            // The icon is the only signal visible without opening the menu, so
-            // it tracks whether anything is connected. Only written on change:
-            // set_icon goes through to the OS, and rewriting the same image
-            // every second is churn for no benefit.
-            let active = snapshot.any_active();
-            if last_active != Some(active) {
-                if let (Some(tray), Some(icon)) = (app.tray_by_id(TRAY_ID), tray_icon(active)) {
-                    if tray.set_icon(Some(icon)).is_ok() {
-                        last_active = Some(active);
-                    }
-                }
-            }
+            update_icon(&app, &state, &snapshot, &mut last_icon);
 
             // `snapshot.rows` follows config order, the same order the items
             // were built in, and `ids == known_ids` above establishes that the
@@ -824,46 +925,121 @@ mod tests {
     }
 
     #[test]
-    fn icon_is_idle_when_nothing_is_connected() {
-        assert!(!snapshot_of(&["dev", "stg"]).any_active());
-        assert!(!Snapshot { rows: vec![] }.any_active());
+    fn icon_is_disconnected_when_everything_is_stopped() {
+        assert_eq!(
+            snapshot_of(&["dev", "stg"]).icon_state(),
+            IconState::Disconnected
+        );
+        // No profiles configured is also nothing connected.
+        assert_eq!(
+            Snapshot { rows: vec![] }.icon_state(),
+            IconState::Disconnected
+        );
     }
 
     #[test]
-    fn icon_is_active_while_running_or_starting() {
-        // Starting counts: the port is bound, and feedback the instant you
-        // click beats waiting a second for the ready line.
-        for status in [ProxyStatus::Running, ProxyStatus::Starting] {
-            let snapshot = Snapshot {
-                rows: vec![row("dev", false, status.clone())],
-            };
-            assert!(snapshot.any_active(), "expected active for {status:?}");
-        }
+    fn one_running_profile_makes_the_icon_connected() {
+        let mut snapshot = snapshot_of(&["dev", "stg", "prd"]);
+        snapshot.rows[1].status = ProxyStatus::Running;
+        assert_eq!(snapshot.icon_state(), IconState::Connected);
     }
 
     #[test]
-    fn failed_profile_does_not_show_as_connected() {
-        // Nothing is listening, so a filled icon would be a lie — the menu
+    fn starting_shows_connecting_not_disconnected() {
+        // Carried over from the two-state icon: the port is bound, and
+        // feedback the instant you click beats waiting a second for the ready
+        // line. What must never happen is `Starting` reading as disconnected.
+        let snapshot = Snapshot {
+            rows: vec![row("dev", false, ProxyStatus::Starting)],
+        };
+        assert_eq!(snapshot.icon_state(), IconState::Connecting);
+        assert_ne!(snapshot.icon_state(), IconState::Disconnected);
+    }
+
+    #[test]
+    fn failed_profile_never_shows_as_connected() {
+        // Nothing is listening, so a connected glyph would be a lie — the menu
         // reports the failure, the icon must not claim a connection.
         let snapshot = Snapshot {
             rows: vec![row("dev", false, ProxyStatus::Failed(diagnosis()))],
         };
-        assert!(!snapshot.any_active());
+        assert_eq!(snapshot.icon_state(), IconState::Error);
+        assert_ne!(snapshot.icon_state(), IconState::Connected);
     }
 
     #[test]
-    fn one_running_profile_makes_the_icon_active() {
-        let mut snapshot = snapshot_of(&["dev", "stg", "prd"]);
-        snapshot.rows[1].status = ProxyStatus::Running;
-        assert!(snapshot.any_active());
+    fn failure_outranks_a_healthy_profile() {
+        // The precedence case: dev is up, prd failed. A failure the user has
+        // not seen is the thing worth surfacing in the menu bar; the menu
+        // itself still carries "dev running, prd failed".
+        let mut snapshot = snapshot_of(&["dev", "prd"]);
+        snapshot.rows[0].status = ProxyStatus::Running;
+        snapshot.rows[1].status = ProxyStatus::Failed(diagnosis());
+        assert_eq!(snapshot.icon_state(), IconState::Error);
+
+        // Order within the row list must not change the answer.
+        snapshot.rows.reverse();
+        assert_eq!(snapshot.icon_state(), IconState::Error);
     }
 
     #[test]
-    fn both_tray_icons_decode() {
+    fn failure_outranks_a_start_in_flight() {
+        let mut snapshot = snapshot_of(&["dev", "prd"]);
+        snapshot.rows[0].status = ProxyStatus::Starting;
+        snapshot.rows[1].status = ProxyStatus::Failed(diagnosis());
+        assert_eq!(snapshot.icon_state(), IconState::Error);
+    }
+
+    #[test]
+    fn starting_outranks_running() {
+        // A start in flight is the more recent user action and the one whose
+        // outcome is still unknown, so it wins over an already-settled
+        // connection.
+        let mut snapshot = snapshot_of(&["dev", "prd"]);
+        snapshot.rows[0].status = ProxyStatus::Running;
+        snapshot.rows[1].status = ProxyStatus::Starting;
+        assert_eq!(snapshot.icon_state(), IconState::Connecting);
+    }
+
+    #[test]
+    fn every_tray_icon_decodes_at_the_intended_size() {
         // A corrupt embedded PNG would leave the tray invisible, which looks
-        // exactly like the app failing to launch.
-        assert!(tray_icon(false).is_some(), "idle icon failed to decode");
-        assert!(tray_icon(true).is_some(), "active icon failed to decode");
+        // exactly like the app failing to launch. Dimensions are asserted, not
+        // just decodability: these must be the 18px assets, because
+        // `Image::from_bytes` hands the declared pixel size straight to the
+        // ~22pt menu bar slot and a 36px asset fills it as a solid block.
+        for state in [
+            IconState::Disconnected,
+            IconState::Connecting,
+            IconState::Connected,
+            IconState::Error,
+        ] {
+            let icon = tray_icon(state)
+                .unwrap_or_else(|| panic!("{} icon failed to decode", state.as_str()));
+            assert_eq!(
+                (icon.width(), icon.height()),
+                (18, 18),
+                "{} icon is not 18x18",
+                state.as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn each_state_maps_to_a_distinct_asset() {
+        // Four states are pointless if two of them are the same picture; a
+        // copy-paste in the constant table would be invisible otherwise.
+        let all = [
+            TRAY_ICON_DISCONNECTED,
+            TRAY_ICON_CONNECTING,
+            TRAY_ICON_CONNECTED,
+            TRAY_ICON_ERROR,
+        ];
+        for (i, a) in all.iter().enumerate() {
+            for b in all.iter().skip(i + 1) {
+                assert_ne!(a, b, "two icon states share the same asset bytes");
+            }
+        }
     }
 
     #[test]

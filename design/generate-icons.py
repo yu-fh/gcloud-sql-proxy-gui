@@ -1,16 +1,24 @@
 #!/usr/bin/env python3
-"""Produce the final icon set from the chosen mark: brackets around a node.
+"""Produce the app icon master from the chosen mark: brackets around a node.
 
-Two distinct jobs:
+The Big Sur shape: a rounded rectangle ("squircle"-ish) with the mark reversed
+out in white. Shown in Finder and the DMG; the app itself has no Dock icon.
+`tauri icon` derives every other size from the 1024px master this writes.
 
-* Menu bar — a *template* image. macOS inverts template images automatically
-  for light/dark menu bars and for the highlighted state when the menu is open,
-  so it must be pure black on transparent with no colour of its own. Two
-  states: idle (hollow node) and active (filled node).
+# The menu bar icons are not generated here
 
-* App icon — the Big Sur shape: a rounded rectangle ("squircle"-ish) with the
-  mark reversed out in white. Shown in Finder and the DMG; the app itself has
-  no Dock icon.
+This script used to also emit the two tray template images (a black bracket
+mark, idle and active). It no longer does, and reintroducing that would be
+wrong: the tray now uses a designer-supplied four-state set — a translucent
+Cloud SQL database glyph with a coloured status dot, for `disconnected`,
+`connecting`, `connected`, and `error` — which is not derivable from this
+bracket mark and is not a template image.
+
+Those assets live in `src-tauri/icons/tray-*.png`, are committed, and are
+embedded by `src-tauri/src/tray.rs` with `include_bytes!`. They come from the
+designer's delivery at 18px (the size the code embeds — see the note in
+`tray.rs` on why the 36px `@2x` variant would render as a solid block). To
+change them, get new artwork; do not regenerate them from here.
 """
 import subprocess
 from pathlib import Path
@@ -20,26 +28,6 @@ OUT.mkdir(exist_ok=True)
 
 BRACKETS = """<path d="M34 24 L20 24 L20 76 L34 76"/>
     <path d="M66 24 L80 24 L80 76 L66 76"/>"""
-
-# The menu bar mark is hinted for 22px rather than being the app mark scaled
-# down. At 22 the app geometry crowds the node against the brackets and the
-# hollow centre closes up into a blob. Hinting means: brackets pushed to the
-# edges with shorter feet, thicker strokes, and a larger node with a thicker
-# ring so the hole survives rasterisation.
-MENUBAR_BRACKETS = """<path d="M32 18 L16 18 L16 82 L32 82"/>
-    <path d="M68 18 L84 18 L84 82 L68 82"/>"""
-
-MENUBAR = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
-  <g fill="none" stroke="#000000" stroke-width="12"
-     stroke-linecap="round" stroke-linejoin="round">
-    {brackets}
-    {node_stroke}
-  </g>
-  {node_fill}
-</svg>"""
-
-IDLE_NODE_STROKE = '<circle cx="50" cy="50" r="11"/>'
-ACTIVE_NODE_FILL = '<circle cx="50" cy="50" r="17" fill="#000000"/>'
 
 # The app icon. Blue-to-indigo reads as "infrastructure" without being the
 # generic macOS-utility grey, and the mark stays legible when Finder shrinks
@@ -93,24 +81,9 @@ def render(stem: str, svg: str, size: int) -> Path:
 
 
 if __name__ == "__main__":
-    idle = MENUBAR.format(
-        brackets=MENUBAR_BRACKETS, node_stroke=IDLE_NODE_STROKE, node_fill=""
-    )
-    active = MENUBAR.format(
-        brackets=MENUBAR_BRACKETS, node_stroke="", node_fill=ACTIVE_NODE_FILL
-    )
-
-    # Menu bar template images at 22px only.
-    #
-    # No `@2x` variant: `Image::from_bytes` in tray.rs knows nothing about the
-    # filename convention and hands whatever pixel size it finds straight to
-    # the menu bar, so a 44px asset fills the 22pt slot edge to edge and reads
-    # as a solid block. Shipping only the size the code embeds removes the
-    # chance of wiring up the wrong one.
-    render("trayTemplate", idle, 22)
-    render("trayActiveTemplate", active, 22)
-
-    # App icon master. `tauri icon` derives every other size from this.
+    # App icon master, and the only thing this script produces. `tauri icon`
+    # derives every other size from it; the menu bar assets are supplied by the
+    # designer — see the module docstring.
     render("app-icon", APP.format(brackets=BRACKETS), 1024)
 
     print("final icons:", sorted(p.name for p in OUT.glob("*.png")))
