@@ -6,7 +6,9 @@
 
 mod app_state;
 mod commands;
+mod dialogs;
 mod tray;
+mod window;
 
 use std::path::{Path, PathBuf};
 
@@ -64,7 +66,7 @@ fn main() {
                 // Dock icon and no window, a menu bar app that silently fell
                 // back to defaults gives no clue that it did.
                 eprintln!("{message}");
-                tray::report_startup_error(app.handle(), message);
+                dialogs::report_startup_error(app.handle(), message);
             }
 
             Ok(())

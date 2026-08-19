@@ -1,0 +1,153 @@
+/* The reset, the native-input overrides, and the window's outer layout: title
+ * bar, the sidebar/content split, and the scrolling content region.
+ *
+ * Everything a webview does by default that AppKit does not -- selectable
+ * labels, force-touch lookups, the caret cursor over static text, web-sized type
+ * -- is corrected here, once.
+ */
+
+* {
+  box-sizing: border-box;
+}
+
+/* --- native input behaviour ----------------------------------------------
+   A webview defaults to browser behaviour: every label is selectable, every
+   word is force-touch-lookup-able, and the caret cursor follows the mouse
+   over static text. AppKit controls do none of that, and each one on its own
+   is enough to say "this is a web page". */
+
+* {
+  /* Chrome is not selectable. Content opts back in below. */
+  user-select: none;
+  -webkit-user-select: none;
+  /* No force-touch link previews or long-press callouts. */
+  -webkit-touch-callout: none;
+  /* The arrow cursor everywhere; fields re-assert the I-beam themselves. */
+  cursor: default;
+}
+
+/* The three places that hold real content rather than chrome: what the user
+   typed, what the backend said, and what the proxy logged. Selecting an error
+   message to paste into Slack is a thing people legitimately do. */
+input,
+textarea,
+.logs,
+.fix-command,
+.banner,
+.notice-body {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+input,
+textarea {
+  cursor: auto;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  /* macOS UI type is 13px. Web-sized type is most of what makes a webview look
+     like a web page rather than a window. */
+  font:
+    13px/1.4 -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui,
+    sans-serif;
+  /* Matches AppKit's own text rendering rather than the browser default. */
+  -webkit-font-smoothing: antialiased;
+  color: var(--text);
+  background: var(--window-bg);
+
+  /* Column layout: fixed title bar, scrolling content, fixed footer -- the
+     shape of a settings sheet. */
+  display: flex;
+  flex-direction: column;
+  /* The window is chrome, not a document: it does not rubber-band. */
+  overflow: hidden;
+}
+
+/* --- title bar ------------------------------------------------------------
+   The window uses TitleBarStyle::Overlay, so the OS draws the traffic lights
+   floating over the page. This strip supplies the clearance they need and the
+   drag region a real title bar would have provided. */
+
+.titlebar {
+  flex: 0 0 auto;
+  height: var(--titlebar-height);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--window-bg);
+  /* Everything in the strip drags the window; interactive children opt back
+     out with .no-drag. There are none today, which is why the strip holds only
+     a title. */
+  -webkit-app-region: drag;
+  user-select: none;
+}
+
+.titlebar-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+/* --- shell ----------------------------------------------------------------
+   Sidebar left, content pane right, below the title bar. The row that makes
+   this one window instead of two. */
+
+.shell {
+  flex: 1 1 auto;
+  display: flex;
+  min-height: 0;
+}
+
+/* --- content pane ---------------------------------------------------------
+   Everything right of the sidebar: the error banner, the scrolling content,
+   and the footer. */
+
+.pane {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--window-bg);
+}
+
+/* --- content --------------------------------------------------------------
+   The only scrolling region. Padding matches System Settings' generous inset
+   around its grouped lists. */
+
+.content {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 4px 20px 20px;
+}
+
+.view {
+  /* `flex: 1` (not the `0 1 auto` default) is what lets the logs view claim the
+     whole content column, so the <pre> inside it can stretch to the window
+     instead of collapsing to its min-height. */
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.view[hidden] {
+  display: none;
+}
+
+/* The logs section is a single tall pane with no footer, so the content region
+   must not add its own bottom inset. */
+body.logs-view .content {
+  padding-bottom: 14px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}

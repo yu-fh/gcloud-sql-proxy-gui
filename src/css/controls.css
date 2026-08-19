@@ -1,0 +1,250 @@
+/* --- source-list gutter controls ------------------------------------------
+   The +/- pair AppKit puts under a source list: small, square, joined into one
+   segmented control, hugging the bottom-left of the group they act on. Not
+   labelled buttons in the footer -- that would read as a web toolbar. */
+
+.list-controls {
+  display: flex;
+  /* Tight to the list above; the group's own corner radius is 10px, so the
+     controls sit just inside its left edge. */
+  margin: 6px 0 0 1px;
+}
+
+.gutter-button {
+  width: 22px;
+  min-height: 20px;
+  height: 20px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* The glyphs are +/− at menu-bar weight; the default 13px button type makes
+     them look undersized in a 20px control. */
+  font-size: 14px;
+  line-height: 1;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+/* Joined: only the outer corners round, and the shared edge is one hairline
+   rather than two stacked. */
+.gutter-button:first-child {
+  border-top-left-radius: 5px;
+  border-bottom-left-radius: 5px;
+}
+
+.gutter-button:last-child {
+  border-top-right-radius: 5px;
+  border-bottom-right-radius: 5px;
+  border-left-width: 0;
+}
+
+/* The one control kind that *does* tint on hover. AppKit's borderless
+   source-list gutter buttons take a subtle background under the pointer, and
+   omitting it here would be as wrong as adding it to a push button. */
+.gutter-button:enabled:hover {
+  background: color-mix(in srgb, var(--control-bg) 92%, var(--text));
+}
+
+.gutter-button:disabled {
+  color: var(--text-tertiary);
+  background: var(--control-bg);
+}
+
+/* --- switch ---------------------------------------------------------------
+   A checkbox styled as the macOS pill switch. The input stays in the DOM and
+   only visually hidden, so focus, the space bar, and VoiceOver all still work
+   on a real control. */
+
+.switch {
+  position: relative;
+  flex: 0 0 auto;
+  margin-left: auto;
+  display: inline-flex;
+  width: 38px;
+  height: 22px;
+}
+
+.switch input {
+  /* Cover the track so a click anywhere on the pill toggles it, but stay
+     invisible; `display: none` would take it out of the focus order. */
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  opacity: 0;
+  z-index: 1;
+  cursor: default;
+}
+
+.switch-track {
+  position: absolute;
+  inset: 0;
+  border-radius: 11px;
+  background: var(--switch-off);
+  box-shadow: inset 0 0 0 0.5px var(--control-border);
+  transition:
+    background 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+/* The knob: a white circle that slides right when on. */
+.switch-track::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.25),
+    0 0 0 0.5px rgba(0, 0, 0, 0.06);
+  transition: transform 0.15s ease;
+}
+
+.switch input:checked + .switch-track {
+  background: var(--accent);
+  box-shadow: none;
+}
+
+.switch input:checked + .switch-track::after {
+  transform: translateX(16px);
+}
+
+.switch input:focus-visible + .switch-track {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+/* A switch row carries a secondary line under its label, so it is taller than
+   a plain row and its control aligns to the first line of text. */
+.row-switch {
+  align-items: center;
+  padding-top: 7px;
+  padding-bottom: 7px;
+}
+
+.row-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.row-description {
+  margin-top: 1px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+/* --- fields ---------------------------------------------------------------
+   Right-aligned inset text fields, sized to the row rather than to the width
+   of the window. */
+
+.row-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  font: inherit;
+  text-align: right;
+  padding: 3px 7px;
+  border: 0.5px solid var(--field-border);
+  border-radius: 5px;
+  background: var(--field-bg);
+  color: var(--text);
+  /* Subtle inset, as AppKit's bezel has. */
+  box-shadow: inset 0 1px 1px rgba(0, 0, 0, 0.04);
+}
+
+/* A narrow field still has to end on the group's right edge, or the column of
+   values stops lining up. Auto margin pushes it there instead of widening it. */
+.row-input.narrow {
+  flex: 0 0 84px;
+  margin-left: auto;
+}
+
+/* No web spin buttons on the port fields. AppKit pairs a stepper with a field
+   only when it is a real NSStepper; WebKit's inner spin button is a browser
+   affordance and reads as one. */
+.row-input::-webkit-inner-spin-button,
+.row-input::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  appearance: none;
+  margin: 0;
+}
+
+.row-input::placeholder {
+  color: var(--text-tertiary);
+}
+
+.row-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  /* The focus ring AppKit draws around a focused field. */
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+select {
+  font: inherit;
+  font-size: 12px;
+  padding: 2px 6px;
+  border: 0.5px solid var(--control-border);
+  border-radius: 5px;
+  background: var(--control-bg);
+  color: var(--text);
+}
+
+/* --- buttons --------------------------------------------------------------
+   Bordered secondary buttons and one accent-filled default, as a settings
+   sheet has. Never full-width. */
+
+button {
+  font: inherit;
+  font-size: 13px;
+  padding: 3px 13px;
+  min-height: 22px;
+  border: 0.5px solid var(--control-border);
+  border-radius: 6px;
+  background: var(--control-bg);
+  color: var(--text);
+  box-shadow: 0 0.5px 1px rgba(0, 0, 0, 0.08);
+}
+
+/* No :hover on a plain push button.
+ *
+ * This is the checklist's precise rule and the one web styling always gets
+ * wrong: AppKit's rounded-bezel NSButton does not light up under the pointer.
+ * It has exactly two states a mouse can produce -- at rest and pressed. Adding
+ * a hover background to Revert/Refresh/Done makes them read as web buttons no
+ * matter how correct their metrics are. Borderless icon buttons *do* tint on
+ * hover (see .gutter-button below), which is why the treatment cannot be
+ * uniform: native varies it by control kind. */
+
+button:active {
+  background: color-mix(in srgb, var(--control-bg) 84%, var(--text));
+}
+
+button:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+/* The default button: accent-filled, and the one Return would activate. */
+button.default {
+  background: var(--accent);
+  border-color: transparent;
+  color: var(--accent-text);
+  font-weight: 500;
+}
+
+button.default:active {
+  background: color-mix(in srgb, var(--accent) 78%, black);
+}
+
+/* A disabled control is not pressable, so it must not depress. */
+button:disabled:active {
+  background: var(--control-bg);
+}
+
+button.small {
+  font-size: 11px;
+  padding: 1px 8px;
+  min-height: 18px;
+}

@@ -1,0 +1,128 @@
+/* Colour, type, and metric tokens for the whole window.
+ *
+ * Tauri renders a webview, so there are no real AppKit controls here -- what
+ * these files do is reproduce the conventions of System Settings closely enough
+ * that the window reads as native: grouped inset lists with hairline separators,
+ * 13px system type, right-aligned values, and the system accent.
+ *
+ * Colours are custom properties, overridden wholesale in the dark block with
+ * macOS's actual dark values (dark grey surfaces, never pure black). Where the
+ * platform exposes a real system colour it is used directly, so the window
+ * follows the user's chosen accent rather than a hardcoded blue.
+ *
+ * First in the import order, because everything else reads these.
+ */
+
+:root {
+  color-scheme: light dark;
+
+  /* Window background is the slightly grey sheet System Settings uses; groups
+     sit on top of it in white, which is what makes an inset list read as
+     inset. */
+  --window-bg: #f2f2f7;
+  --group-bg: #ffffff;
+  --group-bg-hover: rgba(0, 0, 0, 0.03);
+
+  --text: #000000;
+  /* AppKit's own secondaryLabelColor is rgba(60,60,67,0.6), which measures
+     3.4:1 on the group white -- under WCAG AA's 4.5 for text this small. The
+     alpha is raised until it passes; the hue is Apple's, so this still reads
+     as the system's secondary grey rather than as plain black. */
+  --text-secondary: rgba(60, 60, 67, 0.75);
+  /* Same reasoning one step down. The tertiary colour carries the disclosure
+     chevron and the placeholder text, and at 0.3 the chevron measured 1.7:1 --
+     effectively invisible to anyone who needs contrast. */
+  --text-tertiary: rgba(60, 60, 67, 0.56);
+
+  /* Separators are hairlines, not 1px borders: on a Retina display they land
+     on a single device pixel. */
+  --separator: rgba(60, 60, 67, 0.18);
+  --border: rgba(0, 0, 0, 0.14);
+
+  --field-bg: #ffffff;
+  --field-border: rgba(0, 0, 0, 0.18);
+
+  --control-bg: #ffffff;
+  --control-border: rgba(0, 0, 0, 0.12);
+
+  /* The off state of a switch is the grey AppKit uses, not the group white --
+     an off switch has to read as filled, or it looks like a broken outline. */
+  --switch-off: rgba(120, 120, 128, 0.32);
+
+  /* AccentColor follows the user's System Settings accent; the literal is the
+     fallback for engines that do not resolve it. */
+  --accent: #0a69da;
+  --accent: AccentColor;
+
+  /* NOT AccentColorText. WebKit resolves that keyword to black, which put
+     black text and a black status dot on the accent-filled selected row --
+     the worst contrast failure in the window, in both schemes. Every accent
+     macOS ships is dark enough to carry white, and a selected source-list row
+     in AppKit is always white-on-accent, so white is both correct and safe. */
+  --accent-text: #ffffff;
+  /* Secondary text on the accent fill: the status and the chevron of a
+     selected row. At 0.75 alpha this measured 2.9:1 against the accent; 0.9
+     keeps it visibly secondary while clearing AA-large for 11px text. */
+  --on-accent-secondary: rgba(255, 255, 255, 0.9);
+
+  --red: #d70015;
+  --red-bg: rgba(215, 0, 21, 0.09);
+  --green: #1c7c31;
+  --orange: #b25000;
+
+  --logs-bg: #ffffff;
+
+  /* Overlay title bars are ~28px on a standard-density Mac; the extra room
+     keeps the window title clear of the traffic lights. */
+  --titlebar-height: 38px;
+
+  /* The sidebar material. AppKit's sidebar is a distinct, slightly recessed
+     surface behind the content pane -- in light mode a touch greyer than the
+     window sheet, in dark mode a touch darker. It is what makes the split read
+     as two regions rather than one page with a list glued to its left edge. */
+  --sidebar-bg: #ececf0;
+  --sidebar-label: var(--text);
+
+  /* Wide enough for "Profiles" plus its glyph at 13px with room to spare, and
+     narrow enough that the content pane still owns the window. */
+  --sidebar-width: 172px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --window-bg: #1e1e1e;
+    --group-bg: #2c2c2e;
+    --group-bg-hover: rgba(255, 255, 255, 0.05);
+
+    --text: #ffffff;
+    --text-secondary: rgba(235, 235, 245, 0.6);
+    /* 0.3 measured 2.4:1 on the dark group; see the light block. */
+    --text-tertiary: rgba(235, 235, 245, 0.5);
+
+    --separator: rgba(235, 235, 245, 0.18);
+    --border: rgba(255, 255, 255, 0.16);
+
+    --field-bg: rgba(255, 255, 255, 0.06);
+    --field-border: rgba(255, 255, 255, 0.2);
+
+    --control-bg: #4a4a4d;
+    --control-border: rgba(255, 255, 255, 0.12);
+
+    --switch-off: rgba(120, 120, 128, 0.5);
+
+    --accent: #0a84ff;
+    --accent: AccentColor;
+    /* See the light block: AccentColorText resolves to black here too. */
+    --accent-text: #ffffff;
+
+    --red: #ff453a;
+    --red-bg: rgba(255, 69, 58, 0.16);
+    --green: #30d158;
+    --orange: #ff9f0a;
+
+    --logs-bg: #1c1c1e;
+
+    /* Darker than the window sheet, as AppKit's dark sidebar is. */
+    --sidebar-bg: #232325;
+  }
+}

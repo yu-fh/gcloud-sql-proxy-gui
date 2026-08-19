@@ -176,9 +176,19 @@ standalone:
 | `discovery` | Reads `gcloud sql instances list`, reconciles drift |
 | `state` | Decides what must stop before a profile can start |
 
-The Tauri layer above it is deliberately thin: `commands.rs` for the webview,
-`tray.rs` for the menu. Both route start decisions through `core::state` so the
-menu and the window cannot disagree about what starting an environment means.
+The Tauri layer above it is deliberately thin, and split by responsibility:
+`commands.rs` is the IPC surface, `tray.rs` builds and polls the menu,
+`window.rs` opens the settings window and remembers its geometry, `dialogs.rs`
+raises the native alerts both of them need. The tray and the window route start
+decisions through `core::state`, so they cannot disagree about what starting an
+environment means.
+
+The frontend (`src/`) has no bundler — plain ES modules with relative imports,
+under a `default-src 'self'` CSP. `main.js` wires them together; `ipc.js` is the
+only module that touches `window.__TAURI__`; `shell.js` owns the sidebar and the
+window keyboard; `profiles-view.js` and `logs-view.js` are the two sections.
+Styles are split under `src/css/` and pulled in by `styles.css` in cascade
+order.
 
 Configuration lives in
 `~/Library/Application Support/ai.firsthand.fh-cloud-sql-proxy-gui/profiles.json`.

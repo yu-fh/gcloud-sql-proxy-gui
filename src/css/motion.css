@@ -1,0 +1,15 @@
+/* --- reduced motion -------------------------------------------------------
+   The only motion in the window is the switch knob sliding and its track
+   recolouring. AppKit honours this preference for free; a webview has to be
+   told. Last in the file so it wins over the transitions it cancels. */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+  }
+}

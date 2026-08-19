@@ -1,0 +1,75 @@
+/* --- footer ---------------------------------------------------------------
+   The window's actions. Right-aligned with the default button last, as every
+   macOS sheet places them. */
+
+.footer {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 10px 20px 14px;
+  background: var(--window-bg);
+  /* Hairline above, so the actions read as chrome rather than as page
+     content that happens to be last. */
+  box-shadow: inset 0 0.5px 0 var(--separator);
+}
+
+.footer[hidden] {
+  display: none;
+}
+
+/* Pushes the note left and the buttons right.
+ *
+ * The note must never win space from the buttons: a long status line
+ * ("Added. Restart the app…") would otherwise wrap a button label onto two
+ * lines and change the footer's height. It shrinks and ellipsises instead,
+ * and the buttons keep their intrinsic width. */
+.footer .note {
+  margin-right: auto;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.footer button {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+/* --- logs ----------------------------------------------------------------- */
+
+.logs-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0 10px;
+}
+
+.logs-bar-label {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.push {
+  margin-left: auto;
+}
+
+.logs {
+  flex: 1 1 auto;
+  min-height: 120px;
+  margin: 0;
+  padding: 10px 12px;
+  overflow: auto;
+  border-radius: 8px;
+  box-shadow: 0 0 0 0.5px var(--border);
+  background: var(--logs-bg);
+  color: var(--text);
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

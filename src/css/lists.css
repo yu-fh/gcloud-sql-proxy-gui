@@ -1,0 +1,191 @@
+/* --- grouped lists --------------------------------------------------------
+   The core macOS pattern: a small secondary header, then a rounded rectangle
+   of rows with hairline separators that inset from the left edge. */
+
+.group-label {
+  margin: 14px 2px 6px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.group {
+  background: var(--group-bg);
+  border-radius: 10px;
+  /* A hairline outline rather than a shadow: cards with drop shadows are a web
+     idiom, System Settings groups have none. */
+  box-shadow: 0 0 0 0.5px var(--border);
+  overflow: hidden;
+}
+
+/* When a load fails the list has no rows; a collapsed group would otherwise
+   leave a stray hairline under its header. */
+.group:empty {
+  display: none;
+}
+
+/* Consecutive groups under one header (the detail pane stacks connection
+   details, options, and read-only facts) need air between them, or their
+   rounded corners meet and the three read as one group with inconsistent
+   rows -- which is exactly what a System Settings pane never does. */
+.group + .group {
+  margin-top: 14px;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  /* ~30px tall: comfortable without being a web list item. */
+  min-height: 30px;
+  padding: 4px 14px;
+}
+
+/* Separators inset from the left so they start under the label, not under the
+   rounded corner -- the detail that most says "AppKit". */
+.row + .row {
+  box-shadow: inset 0 0.5px 0 var(--separator);
+}
+
+.row-label {
+  flex: 0 0 auto;
+  color: var(--text);
+}
+
+/* The value side takes the slack and right-aligns, so every value in a group
+   lines up on its right edge. */
+.row-value {
+  flex: 1 1 auto;
+  min-width: 0;
+  text-align: right;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.row-empty {
+  color: var(--text-secondary);
+  min-height: 34px;
+}
+
+/* --- selectable rows (the environment list) ------------------------------- */
+
+.row-select {
+  cursor: default;
+  min-height: 34px;
+}
+
+.row-select:hover:not(.selected) {
+  background: var(--group-bg-hover);
+}
+
+/* Selection is the accent fill of a native source list. */
+.row-select.selected {
+  background: var(--accent);
+}
+
+.row-select.selected,
+.row-select.selected .row-label {
+  color: var(--accent-text);
+}
+
+.row-select.selected .chevron,
+.row-select.selected .status {
+  color: var(--on-accent-secondary);
+}
+
+/* On the accent fill the status colours lose their contrast, so the dot goes
+   solid white and the hollow "stopped" ring follows suit. */
+.row-select.selected .dot {
+  background: var(--accent-text);
+  box-shadow: none;
+}
+
+.row-select.selected .dot-stopped {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--on-accent-secondary);
+}
+
+.row-select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.row-select .row-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.row-trailing {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.chevron {
+  flex: 0 0 auto;
+  color: var(--text-tertiary);
+  font-size: 15px;
+  line-height: 1;
+}
+
+/* Status dot, as the tray icon and Finder sidebars use. */
+.dot {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--text-tertiary);
+}
+
+.dot-running {
+  background: var(--green);
+  box-shadow: none;
+}
+
+.dot-starting {
+  background: var(--orange);
+  box-shadow: none;
+}
+
+.dot-failed {
+  background: var(--red);
+  box-shadow: none;
+}
+
+.status {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.status-failed {
+  color: var(--red);
+}
+
+/* A production environment is one click from live. The tag stays legible on
+   the accent fill of a selected row, which is why it carries its own
+   background. */
+.tag {
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.tag-danger {
+  background: var(--red-bg);
+  color: var(--red);
+  box-shadow: inset 0 0 0 0.5px var(--red);
+}
+
+.row-select.selected .tag-danger {
+  background: var(--accent-text);
+  color: var(--red);
+  box-shadow: none;
+}

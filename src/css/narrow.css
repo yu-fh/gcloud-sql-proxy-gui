@@ -1,0 +1,58 @@
+/* --- narrow window --------------------------------------------------------
+   Below the design width the label/value split stops fitting, so rows stack
+   and values left-align. The threshold is the old 460px plus the sidebar it now
+   shares the window with, so the content pane starts stacking at the same width
+   it always did. */
+
+@media (max-width: 632px) {
+  .sidebar {
+    /* Glyph-only, as AppKit collapses a sidebar rather than letting the labels
+       squeeze the content pane. The accessible name lives on the label, which
+       is hidden visually but still read. */
+    flex: 0 0 44px;
+    padding: 6px 6px;
+  }
+
+  .sidebar-row {
+    justify-content: center;
+    padding: 0;
+  }
+
+  .sidebar-label {
+    /* Not display:none -- that would take it out of the accessibility tree and
+       leave the rows unnamed. */
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .content,
+  .footer,
+  .banner {
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+
+  .banner {
+    margin-left: 12px;
+    margin-right: 12px;
+  }
+
+  .row-change {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 2px;
+  }
+
+  .row-change .row-label {
+    flex: 0 0 auto;
+  }
+
+  .diff {
+    justify-content: flex-start;
+    text-align: left;
+  }
+}

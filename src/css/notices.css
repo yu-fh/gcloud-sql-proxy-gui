@@ -1,0 +1,141 @@
+/* --- notices --------------------------------------------------------------
+   The first-run hint and the failure detail. Both sit above the settings group
+   they concern, styled as quiet panels rather than coloured web banners. */
+
+.notice {
+  margin-bottom: 10px;
+  padding: 9px 12px;
+  border-radius: 8px;
+  background: var(--group-bg);
+  box-shadow: 0 0 0 0.5px var(--border);
+}
+
+.notice-title {
+  font-weight: 500;
+}
+
+.notice-body {
+  margin-top: 3px;
+  color: var(--text-secondary);
+}
+
+.notice-error {
+  background: var(--red-bg);
+  box-shadow: 0 0 0 0.5px var(--red);
+}
+
+.notice-error .notice-title {
+  color: var(--red);
+}
+
+.notice-error .notice-body {
+  color: var(--text);
+}
+
+.fix-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.fix-command {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 4px 7px;
+  border-radius: 5px;
+  border: 0.5px solid var(--field-border);
+  background: var(--field-bg);
+  color: var(--text);
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-size: 11px;
+  /* Long commands wrap rather than overflowing the panel. */
+  overflow-wrap: anywhere;
+}
+
+/* Errors from any invoke. Kept as a strip under the title bar so it is
+   impossible to miss and impossible to scroll past unnoticed. */
+.banner {
+  flex: 0 0 auto;
+  margin: 0 20px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: var(--red-bg);
+  box-shadow: 0 0 0 0.5px var(--red);
+  color: var(--red);
+  /* Backend errors can be long and are the whole point of the banner. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.banner[hidden] {
+  display: none;
+}
+
+.footnote {
+  margin: 6px 2px 0;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.note {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+/* --- proposed changes ----------------------------------------------------- */
+
+.changes[hidden] {
+  display: none;
+}
+
+.row-change {
+  align-items: baseline;
+  padding-top: 6px;
+  padding-bottom: 6px;
+}
+
+.row-change .row-label {
+  flex: 0 0 130px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.diff {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: flex-end;
+  gap: 6px;
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-size: 11px;
+  text-align: right;
+}
+
+.diff-from,
+.diff-to {
+  overflow-wrap: anywhere;
+}
+
+.diff-from {
+  color: var(--text-secondary);
+  text-decoration: line-through;
+}
+
+.diff-arrow {
+  color: var(--text-tertiary);
+}
+
+.diff-to {
+  color: var(--text);
+}
+
+.change-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 10px;
+}
