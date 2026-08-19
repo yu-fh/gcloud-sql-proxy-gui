@@ -52,9 +52,10 @@ OUT.mkdir(exist_ok=True)
 # 2. The glyph is centred on its *ink*, not its viewBox. The plates occupy
 #    roughly x 3.5-13.5, y 2-14 of the 18x18 box, so centring the box leaves
 #    the artwork visibly high and left.
-# 3. The status dot is tucked in and shrunk. At 18px it is large and clear of
-#    the plates so it survives rasterisation; reproduced proportionally on a
-#    tile it reads as a bubble glued to the corner.
+# 3. The status dot is tucked against the plates and shrunk. At 18px it sits
+#    clear of them with a wide gap so it survives rasterisation; on a tile that
+#    same gap leaves it floating in empty space instead of reading as a badge
+#    on the database. It belongs against the lower-right plate corner.
 #
 # The tile is a blue-shifted graphite rather than flat grey — dark like the
 # design sheet, but with enough hue not to read as inert. It is deliberately
@@ -69,6 +70,13 @@ APP_LIFT = {
 APP_SCALE = 34
 # Ink centre in glyph units, from the plate geometry plus the tucked-in dot.
 APP_INK_CX, APP_INK_CY = 9.1, 8.4
+
+# The status dot, in the designer's 18-unit glyph space. The lower plate's
+# rotated corner reaches about (12.4, 12.6); putting the dot's centre a little
+# inside that overlaps it slightly, so it reads as a badge sitting on the
+# database rather than a separate mark floating beside it.
+APP_DOT_CX, APP_DOT_CY = 11.9, 11.6
+APP_DOT_R = 1.5
 
 APP_TILE = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
   <defs>
@@ -96,7 +104,7 @@ def app_icon_svg() -> str:
     glyph = re.sub(r'(fill-opacity|stroke-opacity)="([0-9.]+)"', lift, glyph)
     glyph = glyph.replace(
         'cx="14.7" cy="14.1" r="2.05"',
-        'cx="12.6" cy="12.2" r="1.5"',
+        f'cx="{APP_DOT_CX}" cy="{APP_DOT_CY}" r="{APP_DOT_R}"',
     )
 
     return APP_TILE.format(
