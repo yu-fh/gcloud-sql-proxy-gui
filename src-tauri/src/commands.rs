@@ -336,15 +336,36 @@ pub async fn refresh_connection_names(
     Ok(RefreshResult { changes })
 }
 
+/// Where to find `gcloud`.
+///
+/// A `.app` launched from Finder inherits a minimal `PATH` that does not
+/// include `/opt/homebrew/bin`, so relying on the name alone works when run
+/// from a terminal and then fails for exactly the users who installed the
+/// bundle. Prefer the known install locations, and fall back to the bare name
+/// so a `PATH`-only install still works.
+fn gcloud_binary() -> std::path::PathBuf {
+    const KNOWN: [&str; 3] = [
+        "/opt/homebrew/bin/gcloud",
+        "/usr/local/bin/gcloud",
+        // The Cloud SDK's own installer, when not routed through Homebrew.
+        "/usr/local/google-cloud-sdk/bin/gcloud",
+    ];
+    KNOWN
+        .iter()
+        .map(std::path::PathBuf::from)
+        .find(|path| path.exists())
+        .unwrap_or_else(|| std::path::PathBuf::from("gcloud"))
+}
+
 /// Run `gcloud sql instances list` for one profile's project and parse it.
 async fn discover(profile: &Profile) -> Result<Vec<discovery::DiscoveredInstance>, String> {
-    let output = tokio::process::Command::new("gcloud")
+    let output = tokio::process::Command::new(gcloud_binary())
         .args(discovery::gcloud_args(&profile.project))
         .output()
         .await
         .map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
-                "gcloud was not found on your PATH — install the Google Cloud CLI \
+                "gcloud was not found — install the Google Cloud CLI \
                  (https://cloud.google.com/sdk/docs/install) and try again."
                     .to_string()
             } else {
