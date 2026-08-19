@@ -34,22 +34,32 @@ IDLE_NODE_STROKE = '<circle cx="50" cy="50" r="9"/>'
 ACTIVE_NODE_FILL = '<circle cx="50" cy="50" r="14" fill="#000000"/>'
 
 # The app icon. Blue-to-indigo reads as "infrastructure" without being the
-# generic macOS-utility grey, and white-on-blue keeps the mark legible when
-# Finder shrinks it to 16px.
+# generic macOS-utility grey, and the mark stays legible when Finder shrinks
+# it to 16px.
+#
+# The first version drew a heavy pure-white mark on a mid blue and read as a
+# white slab. Three things fixed that, and all three matter together: the tile
+# goes deeper (#1E3A8A at the foot rather than #2B5BD7), the mark is inset
+# further and drawn thinner (scale 5.6 / stroke 7.5, was 6.4 / 9), and it is
+# near-white rather than #FFF. Pure white against a saturated tile glares; the
+# slight tint is what Apple's own utility icons do.
+#
+# It is deliberately NOT transparent. Big Sur onward, a macOS app icon is a
+# rounded tile — a transparent one looks broken in Finder, not minimal.
 APP = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#4C8DFF"/>
-      <stop offset="100%" stop-color="#2B5BD7"/>
+      <stop offset="0%" stop-color="#3D7BF0"/>
+      <stop offset="100%" stop-color="#1E3A8A"/>
     </linearGradient>
   </defs>
   <rect x="92" y="92" width="840" height="840" rx="188" fill="url(#bg)"/>
-  <g transform="translate(192,192) scale(6.4)"
-     fill="none" stroke="#FFFFFF" stroke-width="9"
+  <g transform="translate(232,232) scale(5.6)"
+     fill="none" stroke="#E8F0FE" stroke-width="7.5"
      stroke-linecap="round" stroke-linejoin="round">
     {brackets}
   </g>
-  <circle cx="512" cy="512" r="90" fill="#FFFFFF"/>
+  <circle cx="512" cy="512" r="70" fill="#E8F0FE"/>
 </svg>"""
 
 
