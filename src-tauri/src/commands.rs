@@ -178,6 +178,65 @@ pub async fn save_profiles(
     Ok(())
 }
 
+/// Create a new profile named `name` and persist it.
+///
+/// The id is derived from the name and disambiguated against the ids already
+/// in the config, so two profiles can share a display name without colliding.
+/// The profile starts blank — empty project, empty connection names, the
+/// conventional ports — and the caller edits it from there.
+///
+/// The config guard is held across generate + validate + write + update, so a
+/// concurrent add cannot pick the same id.
+#[tauri::command]
+pub async fn add_profile(state: State<'_, SharedState>, name: String) -> Result<Profile, String> {
+    let mut config = state.config.lock().await;
+
+    let taken: Vec<String> = config.profiles.iter().map(|p| p.id.clone()).collect();
+    let profile = store::new_profile(&name, &taken);
+
+    let mut next = config.clone();
+    next.profiles.push(profile.clone());
+    next.validate().map_err(|e| e.to_string())?;
+    store::save(&state.config_path, &next).map_err(|e| e.to_string())?;
+    *config = next;
+
+    Ok(profile)
+}
+
+/// Delete the profile `id` and persist.
+///
+/// **Stops it first if it is running.** Removing a running profile from the
+/// config without stopping it would strand its `cloud-sql-proxy` child: the
+/// manager keys everything by id, so nothing would ever be able to name that
+/// process again and it would hold its ports until the app quits.
+///
+/// The stop happens before the write, so a failed save leaves the profile
+/// stopped-but-present rather than deleted-but-running.
+#[tauri::command]
+pub async fn delete_profile(state: State<'_, SharedState>, id: String) -> Result<(), String> {
+    // config -> manager, per the lock order.
+    let mut config = state.config.lock().await;
+
+    if !config.profiles.iter().any(|p| p.id == id) {
+        return Err(format!("no profile with id '{id}'"));
+    }
+
+    {
+        // `stop` is idempotent, so this is unconditional rather than guarded
+        // on a status read that could go stale between the two calls.
+        let mut manager = state.manager.lock().await;
+        manager.stop(&id).await;
+    }
+
+    let mut next = config.clone();
+    next.profiles.retain(|p| p.id != id);
+    next.validate().map_err(|e| e.to_string())?;
+    store::save(&state.config_path, &next).map_err(|e| e.to_string())?;
+    *config = next;
+
+    Ok(())
+}
+
 /// Start `id`: stop any port-conflicting profiles, run preflight, spawn.
 ///
 /// Confirmation (danger / stop-then-start) is the caller's responsibility —

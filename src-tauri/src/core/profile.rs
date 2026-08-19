@@ -48,9 +48,13 @@ impl Default for ProxyFlags {
     }
 }
 
-/// A named environment profile (e.g. "dev", "stg", "prd") bundling the two
-/// Cloud SQL instances (primary + replica) that a single proxy process
-/// connects to.
+/// A user-created environment profile bundling the Cloud SQL instances
+/// (primary + optional replica) that a single proxy process connects to.
+///
+/// `id` is stable and machine-facing: it keys the running-process map, the
+/// tray menu item ids, and the log lines, so it must never change once the
+/// profile exists. `name` is display-only and freely editable — renaming a
+/// profile must not touch its id, or a running proxy would be orphaned.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Profile {
     pub id: String,
@@ -64,6 +68,13 @@ pub struct Profile {
     pub impersonate_service_account: Option<String>,
     #[serde(default)]
     pub danger: bool,
+    /// Host used to probe VPN reachability when diagnosing a failed start.
+    ///
+    /// Optional and purely diagnostic: when absent, the probe is skipped and
+    /// no conclusion is drawn. Nothing is derived from the profile's name —
+    /// the user supplies whatever host tells them their VPN is up.
+    #[serde(rename = "vpnProbeHost", default)]
+    pub vpn_probe_host: Option<String>,
 }
 
 impl Profile {
@@ -79,6 +90,63 @@ impl Profile {
     /// The ports this profile's instances bind, in instance order.
     pub fn ports(&self) -> Vec<u16> {
         self.instances.iter().map(|i| i.port).collect()
+    }
+}
+
+/// Derive a stable, unique profile id from a display `name`.
+///
+/// The id is a slug (lowercase ASCII alphanumerics, other runs collapsed to a
+/// single `-`) because it appears in tray menu item ids and log-line prefixes,
+/// where arbitrary user text would be awkward at best. A name that slugifies
+/// to nothing — emoji, CJK, punctuation only — falls back to `"profile"`
+/// rather than an empty id.
+///
+/// Collisions with `taken` are resolved by appending `-2`, `-3`, … The suffix
+/// search is bounded by `taken.len() + 2` candidates, so it always terminates:
+/// that many distinct candidates cannot all be occupied by fewer ids.
+pub fn unique_id_from_name(name: &str, taken: &[String]) -> String {
+    let base = slugify(name);
+    let taken: std::collections::HashSet<&str> = taken.iter().map(String::as_str).collect();
+
+    if !taken.contains(base.as_str()) {
+        return base;
+    }
+
+    for n in 2..(taken.len() + 3) {
+        let candidate = format!("{base}-{n}");
+        if !taken.contains(candidate.as_str()) {
+            return candidate;
+        }
+    }
+
+    // Unreachable given the bound above, but returning a definitely-unique id
+    // beats panicking in a UI action.
+    format!("{base}-{}", taken.len() + 3)
+}
+
+/// Lowercase ASCII slug of `name`; `"profile"` when nothing survives.
+fn slugify(name: &str) -> String {
+    let mut out = String::new();
+    let mut pending_dash = false;
+
+    for ch in name.chars() {
+        if ch.is_ascii_alphanumeric() {
+            if pending_dash && !out.is_empty() {
+                out.push('-');
+            }
+            pending_dash = false;
+            out.push(ch.to_ascii_lowercase());
+        } else {
+            // Any run of non-alphanumerics becomes at most one dash, and only
+            // once something else follows — so no leading or trailing dashes.
+            pending_dash = true;
+        }
+    }
+
+    if out.is_empty() {
+        "profile".to_string()
+    } else {
+        out
     }
 }
 
@@ -237,6 +305,7 @@ mod tests {
             flags: ProxyFlags::default(),
             impersonate_service_account: None,
             danger: false,
+            vpn_probe_host: None,
         }
     }
 
@@ -412,5 +481,117 @@ mod tests {
         assert!(json["instances"][0].get("connection_name").is_none());
         assert!(json["flags"].get("auto_iam_authn").is_none());
         assert!(json.get("impersonate_service_account").is_none());
+    }
+
+    #[test]
+    fn vpn_probe_host_serializes_as_camel_case() {
+        let mut p = standard_profile("dev");
+        p.vpn_probe_host = Some("pg.dev.internal.example.com".to_string());
+        let json = serde_json::to_value(&p).expect("serialize");
+
+        assert_eq!(json["vpnProbeHost"], "pg.dev.internal.example.com");
+        assert!(json.get("vpn_probe_host").is_none());
+    }
+
+    #[test]
+    fn profile_without_vpn_probe_host_still_deserializes() {
+        // Backward compatibility: a profiles.json written before the field
+        // existed must keep loading, with the probe simply unavailable.
+        let json = r#"{
+            "id": "dev",
+            "name": "dev",
+            "project": "my-project-dev",
+            "region": "us-central1",
+            "instances": [
+                {"role": "primary", "connectionName": "p:r:i", "port": 15432}
+            ],
+            "flags": {"autoIamAuthn": true, "privateIp": true},
+            "impersonateServiceAccount": null,
+            "danger": false
+        }"#;
+
+        let profile: Profile = serde_json::from_str(json).expect("deserialize legacy profile");
+        assert_eq!(profile.vpn_probe_host, None);
+        assert_eq!(profile.id, "dev");
+    }
+
+    // --- unique_id_from_name ------------------------------------------------
+
+    #[test]
+    fn id_from_simple_name_is_the_lowercased_name() {
+        assert_eq!(unique_id_from_name("dev", &[]), "dev");
+        assert_eq!(unique_id_from_name("Staging", &[]), "staging");
+    }
+
+    #[test]
+    fn id_slugifies_spaces_and_punctuation_to_single_dashes() {
+        assert_eq!(unique_id_from_name("EU  Prod!!  West", &[]), "eu-prod-west");
+        assert_eq!(unique_id_from_name("data_warehouse", &[]), "data-warehouse");
+    }
+
+    #[test]
+    fn id_has_no_leading_or_trailing_dashes() {
+        assert_eq!(unique_id_from_name("  dev  ", &[]), "dev");
+        assert_eq!(unique_id_from_name("--dev--", &[]), "dev");
+    }
+
+    #[test]
+    fn id_falls_back_to_profile_when_name_has_no_ascii_alphanumerics() {
+        assert_eq!(unique_id_from_name("", &[]), "profile");
+        assert_eq!(unique_id_from_name("   ", &[]), "profile");
+        assert_eq!(unique_id_from_name("生产", &[]), "profile");
+        assert_eq!(unique_id_from_name("🚀", &[]), "profile");
+    }
+
+    #[test]
+    fn id_collision_gets_a_numeric_suffix() {
+        let taken = vec!["dev".to_string()];
+        assert_eq!(unique_id_from_name("dev", &taken), "dev-2");
+    }
+
+    #[test]
+    fn id_collision_walks_past_every_taken_suffix() {
+        let taken = vec!["dev".to_string(), "dev-2".to_string(), "dev-3".to_string()];
+        assert_eq!(unique_id_from_name("dev", &taken), "dev-4");
+    }
+
+    #[test]
+    fn id_collision_reuses_a_freed_suffix() {
+        // "dev-2" was deleted; the next "dev" should take that slot back
+        // rather than skipping to dev-4.
+        let taken = vec!["dev".to_string(), "dev-3".to_string()];
+        assert_eq!(unique_id_from_name("dev", &taken), "dev-2");
+    }
+
+    #[test]
+    fn ids_generated_in_sequence_never_collide() {
+        // The realistic add-three-profiles-with-the-same-name path: each new
+        // id must be unique against everything generated so far, and the
+        // resulting config must validate.
+        let mut taken: Vec<String> = Vec::new();
+        for _ in 0..5 {
+            let id = unique_id_from_name("New Profile", &taken);
+            assert!(!taken.contains(&id), "id {id} was already taken");
+            taken.push(id);
+        }
+        assert_eq!(
+            taken,
+            vec![
+                "new-profile",
+                "new-profile-2",
+                "new-profile-3",
+                "new-profile-4",
+                "new-profile-5",
+            ]
+        );
+
+        let cfg = config(taken.iter().map(|id| standard_profile(id)).collect());
+        assert_eq!(cfg.validate(), Ok(()));
+    }
+
+    #[test]
+    fn id_collision_is_unaffected_by_unrelated_taken_ids() {
+        let taken = vec!["stg".to_string(), "prd".to_string()];
+        assert_eq!(unique_id_from_name("dev", &taken), "dev");
     }
 }

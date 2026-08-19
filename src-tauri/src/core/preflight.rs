@@ -53,16 +53,17 @@ pub fn adc_present(path: &Path) -> bool {
     path.exists()
 }
 
-/// The private DNS name used to probe VPN connectivity for a profile, or
-/// `None` if the profile's name isn't one of the known environments.
+/// The host to probe for VPN connectivity when diagnosing a failed start, or
+/// `None` if this profile has no probe host configured.
+///
+/// Nothing is derived here: the host is whatever the user put in the
+/// profile's `vpnProbeHost` field. Profiles are user-created and freely
+/// named, so there is no name from which a hostname could be inferred.
 ///
 /// `None` means "unknown, cannot probe" — callers must never treat that as
 /// a failure, only as "no signal available."
-pub fn private_dns_for(profile: &Profile) -> Option<String> {
-    match profile.name.as_str() {
-        "dev" | "stg" | "prd" => Some(format!("pg.{}.internal.example.com", profile.name)),
-        _ => None,
-    }
+pub fn vpn_probe_host_for(profile: &Profile) -> Option<String> {
+    profile.vpn_probe_host.clone()
 }
 
 /// Best-effort TCP reachability probe against `host:port`, used to diagnose
@@ -176,6 +177,7 @@ mod tests {
             flags: ProxyFlags::default(),
             impersonate_service_account: None,
             danger: false,
+            vpn_probe_host: None,
         };
 
         (profile, l1, l2)
@@ -343,29 +345,37 @@ mod tests {
             flags: ProxyFlags::default(),
             impersonate_service_account: None,
             danger: false,
+            vpn_probe_host: None,
         }
     }
 
     #[test]
-    fn private_dns_for_known_environments() {
+    fn vpn_probe_host_is_returned_verbatim_from_the_profile() {
+        let mut profile = profile_named("dev");
+        profile.vpn_probe_host = Some("pg.dev.internal.example.com".to_string());
         assert_eq!(
-            private_dns_for(&profile_named("dev")),
+            vpn_probe_host_for(&profile),
             Some("pg.dev.internal.example.com".to_string())
         );
+
+        // Nothing is derived from the name: renaming the profile must not
+        // change the host, and an arbitrary host is passed through unchanged.
+        profile.name = "my staging box".to_string();
+        profile.vpn_probe_host = Some("db.internal.example".to_string());
         assert_eq!(
-            private_dns_for(&profile_named("stg")),
-            Some("pg.stg.internal.example.com".to_string())
-        );
-        assert_eq!(
-            private_dns_for(&profile_named("prd")),
-            Some("pg.prd.internal.example.com".to_string())
+            vpn_probe_host_for(&profile),
+            Some("db.internal.example".to_string())
         );
     }
 
     #[test]
-    fn private_dns_for_unknown_profile_name_is_none() {
-        assert_eq!(private_dns_for(&profile_named("staging-2")), None);
-        assert_eq!(private_dns_for(&profile_named("")), None);
+    fn vpn_probe_host_is_none_when_unset_regardless_of_name() {
+        // Previously "dev"/"stg"/"prd" produced a host purely from the name.
+        // They must not any more: a user-created profile called "dev" with no
+        // probe host configured has no signal available.
+        for name in ["dev", "stg", "prd", "staging-2", ""] {
+            assert_eq!(vpn_probe_host_for(&profile_named(name)), None, "name {name}");
+        }
     }
 
     #[test]

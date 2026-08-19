@@ -93,6 +93,7 @@ mod tests {
             flags: ProxyFlags::default(),
             impersonate_service_account: None,
             danger,
+            vpn_probe_host: None,
         }
     }
 

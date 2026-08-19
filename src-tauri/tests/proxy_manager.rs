@@ -58,6 +58,7 @@ fn test_profile(id: &str) -> Profile {
         flags: ProxyFlags::default(),
         impersonate_service_account: None,
         danger: false,
+        vpn_probe_host: None,
     }
 }
 
@@ -351,6 +352,56 @@ async fn dropping_the_manager_kills_its_children() {
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
+}
+
+/// The sequence `delete_profile` performs: stop the child, then drop the
+/// profile from the config. Deleting without the stop would strand the child —
+/// the manager keys everything by id, so once the profile is gone nothing
+/// could ever name that process again and it would hold its ports until the
+/// app quit.
+///
+/// This asserts on the real pid rather than on `status_of`, because a status
+/// that says "stopped" while the process is still alive is exactly the bug.
+#[tokio::test]
+async fn stopping_before_removal_leaves_no_orphaned_child() {
+    let mut m = manager("ready");
+    let mut config = vec![test_profile("dev"), test_profile("keep")];
+
+    m.start(&config[0]).await.expect("start");
+    poll_running(&m, "dev").await;
+    let pid = m.pid_of("dev").expect("a running child has a pid");
+    assert!(pid_is_alive(pid), "child should be alive before delete");
+
+    // What the command does, in order.
+    m.stop("dev").await;
+    config.retain(|p| p.id != "dev");
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while pid_is_alive(pid) {
+        if Instant::now() >= deadline {
+            panic!("child pid {pid} survived deletion of its profile -- orphan leak");
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    assert!(!m.is_running("dev"));
+    assert!(m.running_ids().is_empty());
+    // The surviving profile is untouched by the delete.
+    assert_eq!(config.len(), 1);
+    assert_eq!(config[0].id, "keep");
+}
+
+/// Deleting a profile that was never started must not error or disturb the
+/// manager: `stop` is idempotent, which is why the command calls it
+/// unconditionally rather than reading a status that could go stale.
+#[tokio::test]
+async fn stopping_a_never_started_profile_before_removal_is_a_no_op() {
+    let mut m = manager("ready");
+
+    m.stop("never-started").await;
+
+    assert_eq!(m.status_of("never-started").await, ProxyStatus::Stopped);
+    assert!(m.running_ids().is_empty());
 }
 
 /// True while `pid` names a live process. `kill -0` only checks for existence

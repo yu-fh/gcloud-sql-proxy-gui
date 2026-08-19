@@ -43,6 +43,8 @@ fn main() {
             commands::list_profiles,
             commands::plan_for,
             commands::save_profiles,
+            commands::add_profile,
+            commands::delete_profile,
             commands::start_profile,
             commands::stop_profile,
             commands::refresh_connection_names,

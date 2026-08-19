@@ -34,6 +34,29 @@
           aria-labelledby="env-label"
         ></div>
 
+        <!-- The macOS source-list convention: small joined +/- buttons at the
+             bottom-left of the group they act on. -->
+        <div class="list-controls">
+          <button
+            id="btn-add"
+            type="button"
+            class="gutter-button"
+            title="Add an environment"
+            aria-label="Add an environment"
+          >
+            +
+          </button>
+          <button
+            id="btn-delete"
+            type="button"
+            class="gutter-button"
+            title="Delete the selected environment"
+            aria-label="Delete the selected environment"
+          >
+            −
+          </button>
+        </div>
+
         <!-- Detail for the selected environment: status, first-run hint,
              failure text, and the editable fields. Built by renderDetail(). -->
         <h2 class="group-label" id="detail-label">Settings</h2>

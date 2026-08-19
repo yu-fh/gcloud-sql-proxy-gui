@@ -32,11 +32,28 @@ pub fn default_config_path() -> Option<PathBuf> {
     dirs::config_dir().map(|dir| dir.join(APP_CONFIG_DIR).join("profiles.json"))
 }
 
-/// Build a single standard-shaped profile: one primary on 15432, one replica
-/// on 15433, both with an empty connection name (filled in later by gcloud
-/// discovery), default proxy flags, no impersonation, and the given danger
-/// flag.
-fn seed_profile(id: &str, name: &str, project: &str, danger: bool) -> Profile {
+/// The conventional ports every profile starts on: primary 15432, replica
+/// 15433.
+///
+/// Every profile defaults to the same pair, which is precisely what makes the
+/// app exclusive-by-default: two profiles cannot both bind 15432, so starting
+/// one stops the other. A user who genuinely wants two proxies at once edits
+/// one profile's ports.
+pub const DEFAULT_PRIMARY_PORT: u16 = 15432;
+pub const DEFAULT_REPLICA_PORT: u16 = 15433;
+
+/// Build a standard-shaped profile: one primary on 15432, one replica on
+/// 15433, both with an empty connection name (filled in later by gcloud
+/// discovery), default proxy flags, and no impersonation.
+///
+/// `vpn_probe_host` is the optional diagnostic host — see [`Profile`].
+fn standard_profile(
+    id: &str,
+    name: &str,
+    project: &str,
+    danger: bool,
+    vpn_probe_host: Option<&str>,
+) -> Profile {
     Profile {
         id: id.to_string(),
         name: name.to_string(),
@@ -46,32 +63,63 @@ fn seed_profile(id: &str, name: &str, project: &str, danger: bool) -> Profile {
             Instance {
                 role: InstanceRole::Primary,
                 connection_name: String::new(),
-                port: 15432,
+                port: DEFAULT_PRIMARY_PORT,
             },
             Instance {
                 role: InstanceRole::Replica,
                 connection_name: String::new(),
-                port: 15433,
+                port: DEFAULT_REPLICA_PORT,
             },
         ],
         flags: ProxyFlags::default(),
         impersonate_service_account: None,
         danger,
+        vpn_probe_host: vpn_probe_host.map(str::to_string),
     }
 }
 
-/// The default seeded config: dev, stg, prd, each with a primary (15432) and
-/// replica (15433) instance and an empty connection name -- gcloud discovery
-/// (a later task) fills those in. All three environments intentionally reuse
-/// the same ports: the app is exclusive-by-default, so only one profile
-/// normally runs its proxy process at a time.
+/// A blank user-created profile: unique `id` derived from `name`, empty
+/// project and connection names, and the conventional ports.
+///
+/// Everything else is left for the user to fill in — this is deliberately not
+/// a copy of any seeded environment, because a new profile that silently
+/// inherited a real project would be a trap.
+pub fn new_profile(name: &str, taken_ids: &[String]) -> Profile {
+    let id = crate::core::profile::unique_id_from_name(name, taken_ids);
+    standard_profile(&id, name, "", false, None)
+}
+
+/// The first-run seed: dev, stg, prd, each with a primary (15432) and replica
+/// (15433) instance and an empty connection name -- gcloud discovery fills
+/// those in.
+///
+/// This is a convenience, not a fixed set: the user can rename, delete, or add
+/// to these freely. Nothing in the app keys off these particular names.
 pub fn seed_profiles() -> ProfileConfig {
     ProfileConfig {
         version: CURRENT_SCHEMA_VERSION,
         profiles: vec![
-            seed_profile("dev", "dev", "my-project-dev", false),
-            seed_profile("stg", "stg", "my-project-stg", false),
-            seed_profile("prd", "prd", "my-project-prd", true),
+            standard_profile(
+                "dev",
+                "dev",
+                "my-project-dev",
+                false,
+                Some("pg.dev.internal.example.com"),
+            ),
+            standard_profile(
+                "stg",
+                "stg",
+                "my-project-stg",
+                false,
+                Some("pg.stg.internal.example.com"),
+            ),
+            standard_profile(
+                "prd",
+                "prd",
+                "my-project-prd",
+                true,
+                Some("pg.prd.internal.example.com"),
+            ),
         ],
     }
 }
@@ -180,6 +228,87 @@ mod tests {
         let cfg = seed_profiles();
         assert_eq!(cfg.validate(), Ok(()));
         assert_eq!(cfg.conflicting_ports().len(), 6);
+    }
+
+    #[test]
+    fn seed_profiles_carry_a_vpn_probe_host() {
+        // The probe host used to be derived from the profile name; it is now
+        // an explicit field, so the seeded three must still carry theirs or
+        // the diagnostic silently regresses for existing users.
+        let cfg = seed_profiles();
+        for profile in &cfg.profiles {
+            assert_eq!(
+                profile.vpn_probe_host,
+                Some(format!("pg.{}.internal.example.com", profile.id)),
+                "profile {}",
+                profile.id
+            );
+        }
+    }
+
+    #[test]
+    fn new_profile_uses_the_conventional_ports_and_is_blank() {
+        let p = new_profile("Analytics", &[]);
+        assert_eq!(p.id, "analytics");
+        assert_eq!(p.name, "Analytics");
+        assert_eq!(p.ports(), vec![DEFAULT_PRIMARY_PORT, DEFAULT_REPLICA_PORT]);
+        assert_eq!(p.project, "");
+        assert!(!p.danger);
+        assert_eq!(p.vpn_probe_host, None);
+        for instance in &p.instances {
+            assert_eq!(instance.connection_name, "");
+        }
+    }
+
+    #[test]
+    fn new_profile_avoids_ids_already_in_the_config() {
+        let cfg = seed_profiles();
+        let taken: Vec<String> = cfg.profiles.iter().map(|p| p.id.clone()).collect();
+
+        let p = new_profile("dev", &taken);
+        assert_eq!(p.id, "dev-2");
+
+        // And the resulting config must validate -- a duplicate id would be a
+        // validation error, so this is the invariant that matters.
+        let mut next = cfg;
+        next.profiles.push(p);
+        assert_eq!(next.validate(), Ok(()));
+    }
+
+    #[test]
+    fn load_or_seed_accepts_a_config_written_before_vpn_probe_host_existed() {
+        // Backward compatibility at the file level: an existing profiles.json
+        // with no vpnProbeHost anywhere must load rather than erroring, which
+        // is what #[serde(default)] on the field buys.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("profiles.json");
+        std::fs::write(
+            &path,
+            r#"{
+              "version": 1,
+              "profiles": [
+                {
+                  "id": "dev",
+                  "name": "dev",
+                  "project": "my-project-dev",
+                  "region": "us-central1",
+                  "instances": [
+                    {"role": "primary", "connectionName": "a:b:c", "port": 15432},
+                    {"role": "replica", "connectionName": "a:b:d", "port": 15433}
+                  ],
+                  "flags": {"autoIamAuthn": true, "privateIp": true},
+                  "impersonateServiceAccount": null,
+                  "danger": false
+                }
+              ]
+            }"#,
+        )
+        .expect("write legacy config");
+
+        let cfg = load_or_seed(&path).expect("legacy config should still load");
+        assert_eq!(cfg.profiles.len(), 1);
+        assert_eq!(cfg.profiles[0].vpn_probe_host, None);
+        assert_eq!(cfg.profiles[0].ports(), vec![15432, 15433]);
     }
 
     #[test]

@@ -416,6 +416,7 @@ mod tests {
             flags: ProxyFlags::default(),
             impersonate_service_account: None,
             danger: false,
+            vpn_probe_host: None,
         }
     }
 
