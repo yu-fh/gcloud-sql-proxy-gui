@@ -158,15 +158,48 @@
             aria-labelledby="nav-logs"
             hidden
           >
+            <!-- Two filters, because the two questions the trail gets asked
+                 are "what happened to dev" and "what went wrong", and they are
+                 asked independently. They compose: severity narrows whatever
+                 the profile filter selected. -->
             <div class="logs-bar">
               <label class="logs-bar-label" for="log-filter">Profile</label>
               <select id="log-filter"></select>
+              <label class="logs-bar-label" for="log-severity">Level</label>
+              <select id="log-severity">
+                <option value="">All</option>
+                <option value="warn">Warnings &amp; Errors</option>
+                <option value="error">Errors Only</option>
+              </select>
               <span id="log-note" class="note" aria-live="polite"></span>
               <button id="btn-logs-refresh" type="button" class="push">
                 Refresh
               </button>
             </div>
-            <pre id="logs" class="logs">Loading…</pre>
+
+            <!-- One row per record: a monospace grid, which is the one place in
+                 this window where monospace is correct. Not a <pre>: each
+                 record now has a severity that has to be styled on its own. -->
+            <div
+              id="logs"
+              class="logs"
+              role="log"
+              aria-label="Audit log"
+              aria-live="polite"
+            >
+              Loading…
+            </div>
+
+            <!-- The trail is persistent now, so where it is matters: the path
+                 is selectable text for anyone who wants to `tail -f` it, and
+                 the button is for anyone who wants to mail it to a colleague. -->
+            <div class="logs-footer">
+              <span class="logs-bar-label">Log file</span>
+              <code id="log-path" class="log-path">—</code>
+              <button id="btn-reveal-log" type="button" class="small push">
+                Show in Finder
+              </button>
+            </div>
           </section>
         </main>
 

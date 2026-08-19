@@ -11,6 +11,7 @@ use std::sync::Arc;
 
 use tokio::sync::Mutex;
 
+use fh_cloud_sql_proxy_gui::core::audit::Logger;
 use fh_cloud_sql_proxy_gui::core::profile::ProfileConfig;
 use fh_cloud_sql_proxy_gui::core::proxy::ProxyManager;
 
@@ -33,6 +34,13 @@ use fh_cloud_sql_proxy_gui::core::proxy::ProxyManager;
 /// A command that holds `manager` and then wants `config` must instead drop
 /// the manager guard first, or clone the data it needs out of `config` before
 /// taking `manager`.
+///
+/// [`Shared::audit`] is deliberately **not** part of that order. It is not a
+/// `tokio::sync::Mutex` at all: internally it is a `std::sync::Mutex` held for
+/// the duration of a `Vec::push`, with no `.await` inside it and no other lock
+/// taken while it is held. A task can therefore write to it while holding
+/// either or both of the two above without any risk of a cycle, which is what
+/// makes it callable from everywhere a thing worth recording happens.
 pub struct Shared {
     /// The profile config as last loaded or saved. Guarded so that
     /// `store::save` — whose docs require callers to serialize saves — can run
@@ -45,6 +53,10 @@ pub struct Shared {
     /// `&mut self` (they reap exited children first), hence a mutex rather
     /// than an `RwLock`.
     pub manager: Mutex<ProxyManager>,
+    /// The audit trail. Not behind a mutex here because it is one internally
+    /// and is `Clone` -- see the lock-ordering note above on why it stands
+    /// outside the `config`/`manager` order.
+    pub audit: Logger,
 }
 
 /// What `tauri::Builder::manage` holds and commands receive as
@@ -52,11 +64,16 @@ pub struct Shared {
 pub type SharedState = Arc<Shared>;
 
 impl Shared {
+    /// The audit logger is taken from the manager rather than passed
+    /// separately, so there is structurally only one: a second logger would
+    /// mean two files, or two halves of one trail that nothing interleaves.
     pub fn new(config: ProfileConfig, config_path: PathBuf, manager: ProxyManager) -> SharedState {
+        let audit = manager.audit();
         Arc::new(Self {
             config: Mutex::new(config),
             config_path,
             manager: Mutex::new(manager),
+            audit,
         })
     }
 }

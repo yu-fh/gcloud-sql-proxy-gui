@@ -68,6 +68,7 @@ use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Manager, Runtime};
 use tauri_plugin_dialog::MessageDialogKind;
 
+use fh_cloud_sql_proxy_gui::core::audit::Category;
 use fh_cloud_sql_proxy_gui::core::proxy::ProxyStatus;
 
 use crate::app_state::SharedState;
@@ -482,6 +483,25 @@ fn spawn_poll_loop<R: Runtime>(
                     Some(new_handles)
                 });
 
+                match &rebuilt {
+                    Some(_) => state.audit.info(
+                        Category::Event,
+                        None,
+                        format!(
+                            "tray menu rebuilt: profiles [{}] (was [{}])",
+                            ids.join(", "),
+                            known_ids.join(", ")
+                        ),
+                    ),
+                    // Worth a warning: the menu is now stale relative to the
+                    // config, and the loop is retrying rather than recovering.
+                    None => state.audit.warn(
+                        Category::Event,
+                        None,
+                        "tray menu rebuild failed; keeping the previous menu and retrying",
+                    ),
+                }
+
                 if let Some(new_handles) = rebuilt {
                     last_status = snapshot.status_line();
                     last_labels = snapshot.rows.iter().map(|row| row.label()).collect();
@@ -576,13 +596,28 @@ async fn handle_menu_event<R: Runtime>(
 ) {
     match id.as_str() {
         ID_QUIT => {
+            state
+                .audit
+                .info(Category::Action, None, "chose Quit from the tray menu");
             // `RunEvent::Exit` in `main` stops every child, so this does not
             // leak a proxy holding 15432.
             app.exit(0);
         }
-        ID_PROFILES => open_settings(&app, Section::Profiles),
-        ID_LOGS => open_settings(&app, Section::Logs),
-        ID_AUTOSTART => toggle_autostart(&app, &autostart_item),
+        ID_PROFILES => {
+            state.audit.info(
+                Category::Action,
+                None,
+                "opened the settings window on Profiles",
+            );
+            open_settings(&app, Section::Profiles);
+        }
+        ID_LOGS => {
+            state
+                .audit
+                .info(Category::Action, None, "opened the settings window on Logs");
+            open_settings(&app, Section::Logs);
+        }
+        ID_AUTOSTART => toggle_autostart(&app, &autostart_item, &state),
         ID_STATUS => {}
         other => {
             if let Some(profile_id) = other.strip_prefix(PROFILE_PREFIX) {
@@ -602,6 +637,15 @@ async fn toggle_profile<R: Runtime>(app: &AppHandle<R>, state: &SharedState, pro
         let mut manager = state.manager.lock().await;
         manager.is_running(profile_id)
     };
+
+    state.audit.info(
+        Category::Action,
+        Some(profile_id),
+        format!(
+            "clicked the tray row for '{profile_id}' while it was {}",
+            if running { "running" } else { "not running" }
+        ),
+    );
 
     if running {
         if let Err(message) = commands::stop_profile(app.state(), profile_id.to_string()).await {
@@ -659,14 +703,40 @@ async fn confirm_danger<R: Runtime>(
         message.push_str(&format!("\n\nStopping first: {}.", stop_first.join(", ")));
     }
 
-    confirm(
+    state.audit.warn(
+        Category::Action,
+        Some(profile_id),
+        format!("production-start confirmation shown for '{name}' on {ports}"),
+    );
+
+    let confirmed = confirm(
         app,
         format!("Start {name}?"),
         message,
         "Start production",
         MessageDialogKind::Warning,
     )
-    .await
+    .await;
+
+    // Both answers are recorded. A cancelled production start is exactly the
+    // kind of thing someone later wants to prove happened -- "did I actually
+    // start prd at 14:02, or did I back out?" -- and only logging the
+    // confirmation would make the two indistinguishable.
+    if confirmed {
+        state.audit.warn(
+            Category::Action,
+            Some(profile_id),
+            format!("CONFIRMED the production start of '{name}'"),
+        );
+    } else {
+        state.audit.info(
+            Category::Action,
+            Some(profile_id),
+            format!("cancelled the production start of '{name}'"),
+        );
+    }
+
+    confirmed
 }
 
 /// Whether the app is registered to launch at login. A failed query reads as
@@ -686,7 +756,11 @@ fn autostart_enabled<R: Runtime>(app: &AppHandle<R>) -> bool {
 /// so it has to be forced back to whatever the OS actually reports afterwards
 /// — otherwise a failed `enable` leaves a ticked box claiming a registration
 /// that does not exist.
-fn toggle_autostart<R: Runtime>(app: &AppHandle<R>, item: &CheckMenuItem<R>) {
+fn toggle_autostart<R: Runtime>(
+    app: &AppHandle<R>,
+    item: &CheckMenuItem<R>,
+    state: &SharedState,
+) {
     use tauri_plugin_autostart::ManagerExt;
 
     let autolaunch = app.autolaunch();
@@ -698,11 +772,23 @@ fn toggle_autostart<R: Runtime>(app: &AppHandle<R>, item: &CheckMenuItem<R>) {
         autolaunch.enable()
     };
 
-    let _ = item.set_checked(autolaunch.is_enabled().unwrap_or(currently));
+    let now = autolaunch.is_enabled().unwrap_or(currently);
+    let _ = item.set_checked(now);
 
     if let Err(error) = result {
+        state.audit.error(
+            Category::Action,
+            None,
+            format!("Launch at Login toggle failed: {error}"),
+        );
         report_error(app, "Could not change Launch at Login", &error.to_string());
+        return;
     }
+    state.audit.info(
+        Category::Action,
+        None,
+        format!("Launch at Login {currently} -> {now}"),
+    );
 }
 
 #[cfg(test)]

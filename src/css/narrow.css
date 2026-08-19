@@ -40,4 +40,34 @@
     margin-left: 12px;
     margin-right: 12px;
   }
+
+  /* The logs bar carries two filters, a count, and Refresh. At the window's
+     520pt minimum that does not fit on one line, and letting it overflow would
+     push Refresh off the right edge where nothing could reach it. Wrapping is
+     what AppKit does to a toolbar it cannot fit, and the note is what gives way
+     first because it is the only item that is not a control. */
+  .logs-bar {
+    flex-wrap: wrap;
+  }
+
+  .logs-bar .note {
+    /* Ellipsise rather than force a wrap of its own; the count is the least
+       important thing in the row. */
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* The leading columns are sized for a comfortable width; at 520pt they would
+     leave the message column too narrow to read. Time and severity are the two
+     that can give ground -- the source column holds profile ids, which must not
+     ellipsise to nothing. */
+  .log-row {
+    grid-template-columns: 5em 3em 5em 1fr;
+    gap: 6px;
+    padding-left: 8px;
+    padding-right: 8px;
+  }
 }

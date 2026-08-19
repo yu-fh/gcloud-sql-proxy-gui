@@ -22,6 +22,7 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 
+use super::audit::{Category, Logger};
 use super::log_watcher::{self, Diagnosis, ProxyEvent};
 use super::profile::Profile;
 
@@ -75,6 +76,13 @@ pub struct ProxyManager {
     statuses: Statuses,
     logs: Logs,
     log_cap: usize,
+    /// The audit trail. Every spawn argv, child exit, status transition and
+    /// output line goes here as well as into `logs`, so the persisted trail
+    /// carries them in order alongside the user actions that caused them.
+    ///
+    /// Defaults to a memory-only logger so `ProxyManager::new` keeps its
+    /// one-argument shape and the integration tests need no logger of their own.
+    audit: Logger,
 }
 
 impl ProxyManager {
@@ -86,7 +94,21 @@ impl ProxyManager {
             statuses: Arc::new(Mutex::new(HashMap::new())),
             logs: Arc::new(Mutex::new(Vec::new())),
             log_cap: DEFAULT_LOG_CAP,
+            audit: Logger::memory_only(),
         }
+    }
+
+    /// Record this manager's events into `audit` instead of into a throwaway
+    /// memory-only logger.
+    pub fn with_audit(mut self, audit: Logger) -> Self {
+        self.audit = audit;
+        self
+    }
+
+    /// The audit logger this manager writes to, so the command layer can share
+    /// the one the app was built with.
+    pub fn audit(&self) -> Logger {
+        self.audit.clone()
     }
 
     /// Set an environment variable on every child this manager spawns.
@@ -143,9 +165,32 @@ impl ProxyManager {
     /// process is gone, so this cannot stall on a healthy child. Status is left
     /// to the exit watcher, which has seen every log line and can tell a
     /// diagnosed failure from a plain exit.
+    /// This is also the one place a child's exit *status* is observable: the
+    /// manager owns the `Child` (so that dropping it kills the process), which
+    /// means no other task can call `wait`. So the code is logged from here,
+    /// where `try_wait` hands it over.
     fn reap_exited(&mut self) {
-        self.children
-            .retain(|_, child| !matches!(child.try_wait(), Ok(Some(_))));
+        let audit = &self.audit;
+        self.children.retain(|profile_id, child| match child.try_wait() {
+            Ok(Some(status)) => {
+                let described = match status.code() {
+                    Some(0) => "exited cleanly (code 0)".to_string(),
+                    Some(code) => format!("exited with code {code}"),
+                    // No code means a signal, which is the normal path for a
+                    // child we killed ourselves.
+                    None => format!("exited via signal ({status})"),
+                };
+                if status.success() {
+                    audit.info(Category::Event, Some(profile_id), format!("child {described}"));
+                } else {
+                    audit.warn(Category::Event, Some(profile_id), format!("child {described}"));
+                }
+                false
+            }
+            // Still running, or the status could not be read -- either way the
+            // child stays in the map.
+            _ => true,
+        });
     }
 
     /// The OS pid of a running child, if any. Used by tests to assert against
@@ -172,9 +217,11 @@ impl ProxyManager {
             return Err(ProxyError::AlreadyRunning(profile.id.clone()));
         }
 
+        let argv = args_for(profile);
+
         let mut command = Command::new(&self.binary);
         command
-            .args(args_for(profile))
+            .args(&argv)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
@@ -185,10 +232,37 @@ impl ProxyManager {
             command.env(key, value);
         }
 
-        let mut child = command.spawn().map_err(|source| ProxyError::Spawn {
-            binary: self.binary.display().to_string(),
-            source,
+        // The exact argv, before the spawn: if the spawn fails, this is the one
+        // thing that explains why, and logging it afterwards would lose it.
+        // Connection names and project ids are recorded in full -- the user
+        // asked for that explicitly, and an elided argv cannot answer "what did
+        // it actually run".
+        self.audit.info(
+            Category::Event,
+            Some(&profile.id),
+            format!(
+                "spawning: {} {}",
+                self.binary.display(),
+                argv.join(" ")
+            ),
+        );
+
+        let mut child = command.spawn().map_err(|source| {
+            self.audit.error(
+                Category::Event,
+                Some(&profile.id),
+                format!("spawn failed: {}: {source}", self.binary.display()),
+            );
+            ProxyError::Spawn {
+                binary: self.binary.display().to_string(),
+                source,
+            }
         })?;
+
+        if let Some(pid) = child.id() {
+            self.audit
+                .info(Category::Event, Some(&profile.id), format!("spawned pid {pid}"));
+        }
 
         let stdout = child.stdout.take();
         let stderr = child.stderr.take();
@@ -213,6 +287,7 @@ impl ProxyManager {
                 Arc::clone(&self.statuses),
                 Arc::clone(&self.logs),
                 self.log_cap,
+                self.audit.clone(),
             ));
         }
 
@@ -221,7 +296,12 @@ impl ProxyManager {
         // there is nothing to show the user, so report Stopped rather than
         // inventing a failure. A `Failed` status set from a real diagnosis, or
         // a `Stopped` already set by `stop`, is left untouched.
-        spawn_exit_watcher(readers, profile.id.clone(), Arc::clone(&self.statuses));
+        spawn_exit_watcher(
+            readers,
+            profile.id.clone(),
+            Arc::clone(&self.statuses),
+            self.audit.clone(),
+        );
 
         self.children.insert(profile.id.clone(), child);
         Ok(())
@@ -231,8 +311,17 @@ impl ProxyManager {
     /// running, except that the status is still normalised to `Stopped`.
     pub async fn stop(&mut self, profile_id: &str) {
         if let Some(mut child) = self.children.remove(profile_id) {
+            let pid = child.id();
             // `kill` sends SIGKILL and awaits the child, so no zombie is left.
             let _ = child.kill().await;
+            self.audit.info(
+                Category::Event,
+                Some(profile_id),
+                match pid {
+                    Some(pid) => format!("killed child pid {pid}"),
+                    None => "killed child (pid already released)".to_string(),
+                },
+            );
         }
         self.set_status(profile_id, ProxyStatus::Stopped).await;
     }
@@ -244,11 +333,34 @@ impl ProxyManager {
         }
     }
 
+    /// Write a status and record the transition.
+    ///
+    /// Only the transitions this manager makes directly (`Starting` on spawn,
+    /// `Stopped` on stop) come through here; the ones the reader tasks make
+    /// (`Running`, `Failed`) log themselves, because they alone know which log
+    /// line caused them.
+    ///
+    /// A no-op write is not logged: `stop` is idempotent and is called
+    /// unconditionally on delete, so logging every `Stopped -> Stopped` would
+    /// fill the trail with transitions that did not happen.
     async fn set_status(&self, profile_id: &str, status: ProxyStatus) {
-        self.statuses
-            .lock()
-            .await
-            .insert(profile_id.to_string(), status);
+        let mut guard = self.statuses.lock().await;
+        let previous = guard.get(profile_id).cloned();
+        let changed = previous.as_ref() != Some(&status);
+        guard.insert(profile_id.to_string(), status.clone());
+        drop(guard);
+
+        if changed {
+            self.audit.info(
+                Category::Event,
+                Some(profile_id),
+                format!(
+                    "status: {} -> {}",
+                    describe(previous.as_ref()),
+                    describe(Some(&status))
+                ),
+            );
+        }
     }
 }
 
@@ -282,14 +394,31 @@ fn spawn_reader(
     statuses: Statuses,
     logs: Logs,
     log_cap: usize,
+    audit: Logger,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         match stream {
             StreamKind::Stdout(s) => {
-                consume(BufReader::new(s).lines(), profile_id, statuses, logs, log_cap).await
+                consume(
+                    BufReader::new(s).lines(),
+                    profile_id,
+                    statuses,
+                    logs,
+                    log_cap,
+                    audit,
+                )
+                .await
             }
             StreamKind::Stderr(s) => {
-                consume(BufReader::new(s).lines(), profile_id, statuses, logs, log_cap).await
+                consume(
+                    BufReader::new(s).lines(),
+                    profile_id,
+                    statuses,
+                    logs,
+                    log_cap,
+                    audit,
+                )
+                .await
             }
         }
     })
@@ -301,24 +430,50 @@ async fn consume<R: tokio::io::AsyncBufRead + Unpin>(
     statuses: Statuses,
     logs: Logs,
     log_cap: usize,
+    audit: Logger,
 ) {
     while let Ok(Some(line)) = lines.next_line().await {
         push_log(&logs, log_cap, &profile_id, line.clone()).await;
 
+        // Category 4: the child's own output, into the same stream as
+        // everything else so its ordering against the user actions and status
+        // transitions around it is preserved.
+        //
+        // Severity is taken from the classification rather than from the text:
+        // a line that diagnosed a failure is an error, and everything else is
+        // ordinary output. Guessing at severity by grepping for "error" would
+        // mark the proxy's own informational mentions of the word.
         match log_watcher::classify(&line) {
             ProxyEvent::Ready => {
+                audit.info(Category::Proxy, Some(&profile_id), line);
+                audit.info(
+                    Category::Event,
+                    Some(&profile_id),
+                    "status: Starting -> Running (ready line seen)",
+                );
                 statuses
                     .lock()
                     .await
                     .insert(profile_id.clone(), ProxyStatus::Running);
             }
             ProxyEvent::Failure(diagnosis) => {
+                audit.error(Category::Proxy, Some(&profile_id), line);
+                audit.error(
+                    Category::Event,
+                    Some(&profile_id),
+                    format!(
+                        "status: -> Failed ({:?}): {}",
+                        diagnosis.kind, diagnosis.message
+                    ),
+                );
                 statuses
                     .lock()
                     .await
                     .insert(profile_id.clone(), ProxyStatus::Failed(diagnosis));
             }
-            ProxyEvent::Noise => {}
+            ProxyEvent::Noise => {
+                audit.info(Category::Proxy, Some(&profile_id), line);
+            }
         }
     }
 }
@@ -336,20 +491,58 @@ fn spawn_exit_watcher(
     readers: Vec<tokio::task::JoinHandle<()>>,
     profile_id: String,
     statuses: Statuses,
+    audit: Logger,
 ) {
     tokio::spawn(async move {
         for reader in readers {
             let _ = reader.await;
         }
 
+        // The exit *code* is deliberately not reported here, and cannot be: the
+        // manager owns the `Child` so that dropping it kills the process, which
+        // rules out calling `wait` from this task. `reap_exited` is the only
+        // thing that reaps, and it does so with `try_wait` from the manager --
+        // so the code is logged there, where it is actually observable. What
+        // this task knows is that the streams closed, which is the earliest
+        // observable moment of the exit, and that is what it records.
         let mut guard = statuses.lock().await;
+        let previous = guard.get(&profile_id).cloned();
         if matches!(
-            guard.get(&profile_id),
+            previous,
             Some(ProxyStatus::Running | ProxyStatus::Starting)
         ) {
+            audit.warn(
+                Category::Event,
+                Some(&profile_id),
+                format!(
+                    "status: {} -> Stopped (child streams closed; no diagnosis)",
+                    describe(previous.as_ref())
+                ),
+            );
             guard.insert(profile_id, ProxyStatus::Stopped);
+        } else {
+            audit.info(
+                Category::Event,
+                Some(&profile_id),
+                format!(
+                    "child streams closed; status stays {}",
+                    describe(previous.as_ref())
+                ),
+            );
         }
     });
+}
+
+/// A short name for a status, for log messages. `Failed` deliberately does not
+/// include the diagnosis message -- the transition into `Failed` already logged
+/// it, and repeating it on every later mention would bury the trail.
+fn describe(status: Option<&ProxyStatus>) -> &'static str {
+    match status {
+        Some(ProxyStatus::Stopped) | None => "Stopped",
+        Some(ProxyStatus::Starting) => "Starting",
+        Some(ProxyStatus::Running) => "Running",
+        Some(ProxyStatus::Failed(_)) => "Failed",
+    }
 }
 
 /// Append `text`, then trim the buffer to `cap` by draining from the front so
@@ -498,6 +691,88 @@ mod tests {
         let m = ProxyManager::new("/bin/true").with_log_cap(0);
         m.push_log_line("dev", "a").await;
         assert!(m.logs_handle().lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_spawn_argv_is_audited_in_full_before_the_spawn() {
+        // The argv is the one thing that explains a spawn failure, so it has to
+        // be recorded even when the binary does not exist.
+        let audit = Logger::memory_only();
+        let mut m = ProxyManager::new("/nonexistent/cloud-sql-proxy").with_audit(audit.clone());
+        let _ = m.start(&profile()).await;
+
+        let messages: Vec<String> = audit.records().into_iter().map(|r| r.message).collect();
+        let spawning = messages
+            .iter()
+            .find(|m| m.starts_with("spawning:"))
+            .expect("the argv should be audited");
+        // Full detail, no redaction: the connection names are the point.
+        assert!(spawning.contains("proj:us-central1:dev-primary?port=15432"), "{spawning}");
+        assert!(spawning.contains("--auto-iam-authn"), "{spawning}");
+        assert!(
+            messages.iter().any(|m| m.starts_with("spawn failed:")),
+            "a failed spawn should be audited as an error: {messages:?}"
+        );
+        assert!(
+            audit
+                .filtered(Some(crate::core::audit::Severity::Error), None)
+                .iter()
+                .any(|r| r.message.starts_with("spawn failed:")),
+            "the spawn failure should carry error severity"
+        );
+    }
+
+    #[tokio::test]
+    async fn status_transitions_are_audited_once_and_not_when_unchanged() {
+        let audit = Logger::memory_only();
+        let mut m = ProxyManager::new("/bin/true").with_audit(audit.clone());
+
+        m.stop("dev").await;
+        let first = audit
+            .records()
+            .into_iter()
+            .filter(|r| r.message.starts_with("status:"))
+            .count();
+        assert_eq!(first, 1, "the first stop is a real Stopped transition");
+
+        // `stop` is idempotent and is called unconditionally on delete; a
+        // no-op must not add a transition that did not happen.
+        m.stop("dev").await;
+        let second = audit
+            .records()
+            .into_iter()
+            .filter(|r| r.message.starts_with("status:"))
+            .count();
+        assert_eq!(second, 1, "a no-op stop must not be logged as a transition");
+    }
+
+    #[tokio::test]
+    async fn audit_records_carry_the_profile_id_so_the_view_can_filter() {
+        let audit = Logger::memory_only();
+        let mut m = ProxyManager::new("/nonexistent/proxy").with_audit(audit.clone());
+        let _ = m.start(&profile()).await;
+
+        assert!(
+            !audit.records().is_empty(),
+            "the start attempt should have produced records"
+        );
+        assert!(
+            audit
+                .records()
+                .iter()
+                .all(|r| r.profile_id.as_deref() == Some("dev")),
+            "every record from a profile operation should be tagged with it"
+        );
+        assert_eq!(audit.filtered(None, Some("dev")).len(), audit.records().len());
+    }
+
+    #[tokio::test]
+    async fn a_manager_built_without_a_logger_still_works() {
+        // `ProxyManager::new` keeps its one-argument shape, which is what lets
+        // the integration tests stay unchanged.
+        let mut m = ProxyManager::new("/bin/true");
+        m.stop("dev").await;
+        assert_eq!(m.status_of("dev").await, ProxyStatus::Stopped);
     }
 
     #[tokio::test]

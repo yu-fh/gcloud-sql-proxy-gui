@@ -61,15 +61,146 @@
   flex: 1 1 auto;
   min-height: 120px;
   margin: 0;
-  padding: 10px 12px;
+  padding: 6px 0;
   overflow: auto;
   border-radius: 8px;
   box-shadow: 0 0 0 0.5px var(--border);
   background: var(--logs-bg);
   color: var(--text);
+  /* The system mono stack. A log pane is the one place in this window where
+     monospace is correct: the columns only line up if the digits do. */
   font-family: ui-monospace, 'SF Mono', Menlo, monospace;
   font-size: 11px;
   line-height: 1.45;
-  white-space: pre-wrap;
+}
+
+/* One record. A grid rather than a flex row so the three leading columns line
+   up down the whole pane -- which is the entire reason to use monospace here --
+   while the message takes whatever is left and wraps within its own column
+   instead of under the timestamp. */
+.log-row {
+  display: grid;
+  grid-template-columns: 5.5em 3.4em 6.5em 1fr;
+  gap: 8px;
+  padding: 1px 12px;
+  align-items: baseline;
+}
+
+/* Hairlines between records would be noise at 500 rows; a very subtle
+   alternating tint is what makes a long dump scannable without adding rules. */
+.log-row:nth-child(even) {
+  background: var(--log-stripe);
+}
+
+/* Secondary, not tertiary. The tertiary colour measured 3.11:1 against the
+   pane's white in WebKit -- under AA's 4.5 for text this small, and these two
+   columns are 10-11px. Tertiary is correct for a chevron nobody reads; a
+   timestamp is read. */
+.log-time {
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.log-severity {
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  /* 10px is the floor: smaller stops being readable regardless of contrast. */
+  font-size: 10px;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+/* Same colour as the two columns before it, since AA rules out going lighter.
+   The hierarchy is carried by weight instead: the source is the column you scan
+   down looking for a profile, so it is the one that gets the emphasis. */
+.log-source {
+  color: var(--text-secondary);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.log-message {
+  color: var(--text);
   overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+/* Errors are visually distinct in three ways at once -- the severity word, a
+   tinted row, and a red rule down the left -- because colour alone is not a
+   channel everyone has. Warnings get the same treatment one step quieter. */
+.log-row.log-error {
+  background: var(--red-bg);
+  box-shadow: inset 2px 0 0 var(--red);
+}
+
+/* --red-on-tint, not --red: the row's own tint lifts the background enough that
+   the plain red drops under AA in dark mode. See the token. */
+.log-row.log-error .log-severity,
+.log-row.log-error .log-message {
+  color: var(--red-on-tint);
+}
+
+.log-row.log-warn {
+  background: var(--warn-bg);
+  box-shadow: inset 2px 0 0 var(--orange);
+}
+
+.log-row.log-warn .log-severity {
+  color: var(--orange);
+}
+
+/* The stripe must not override a severity tint. */
+.log-row.log-error:nth-child(even),
+.log-row.log-warn:nth-child(even) {
+  background: var(--red-bg);
+}
+
+.log-row.log-warn:nth-child(even) {
+  background: var(--warn-bg);
+}
+
+.log-empty {
+  padding: 8px 12px;
+  color: var(--text-secondary);
+}
+
+/* --- the log file's location ---------------------------------------------- */
+
+.logs-footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0 0;
+  min-width: 0;
+}
+
+/* Selectable, because the point of showing the path is that someone might want
+   to paste it into a terminal.
+ *
+ * Deliberately NOT `direction: rtl`, which is the usual trick for ellipsising a
+ * path from its left. In WebKit that moves the leading `/` to the visual end of
+ * the string -- the rendered text read `Users/yfu/…/audit.log/`, which is not a
+ * path, and copying what you can see would give you the wrong one. Wrapping is
+ * the honest alternative: the row grows by a line at narrow widths instead of
+ * displaying something false. */
+.log-path {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-size: 11px;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+/* The row holds a wrapping path next to a fixed button, so it aligns to the
+   first line rather than centring a two-line path against the button. */
+.logs-footer {
+  align-items: baseline;
+}
+
+.logs-footer .push {
+  flex: 0 0 auto;
 }

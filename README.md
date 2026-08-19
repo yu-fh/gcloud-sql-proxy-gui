@@ -149,7 +149,43 @@ The app names the cause rather than showing you a log:
 | Port in use | Another environment or a stray proxy holds it. Stop it, or change this environment's ports. |
 | Instance not found | Terraform replaced it. Look the new connection name up and type it into **Profiles…**. |
 
-**Logs…** shows the proxy's raw output if you need more than that.
+**Logs…** shows the full audit trail if you need more than that.
+
+## The audit log
+
+**Logs…** is not just the proxy's output. It is an append-only trail of four
+things, in one ordered stream:
+
+- **what you did** — started or stopped an environment, what a save changed
+  field by field, profiles added and deleted, production-start confirmations
+  (both the confirmed and the cancelled ones), the window being opened;
+- **what the app did** — preflight outcomes, the exact `cloud-sql-proxy` argv,
+  the child's pid and exit code, every status transition and what caused it,
+  tray menu rebuilds;
+- **what the machine is** — recorded once per launch: app version, macOS
+  version, the resolved `cloud-sql-proxy` path and its version, the `gcloud`
+  account, and the config path;
+- **what the proxy printed** — every line, tagged with its environment.
+
+Filter it by environment, by severity, or both. Errors are called out in the
+view, so a failed start is findable without reading the whole thing.
+
+It is also written to disk, so a crash or a restart does not lose it:
+
+```
+~/Library/Logs/ai.firsthand.fh-cloud-sql-proxy-gui/audit.log
+```
+
+That is the macOS convention and where Console.app looks. **Show in Finder** in
+the Logs section reveals it. The file rotates at 2 MiB and keeps three older
+generations, so it is capped at 8 MiB and small enough to mail to a colleague.
+
+**It is not redacted.** Your `gcloud` account email, your GCP project ids, and
+your full connection names are written in the clear — a log that elides the
+connection name cannot answer the question you opened it for. Credentials are
+the exception and are never recorded: the app reads the account email, never the
+token beside it. The file is local and readable only by you; treat it as you
+would `profiles.json` before sending it anywhere.
 
 ## Tests
 
@@ -173,6 +209,7 @@ standalone:
 
 | Module | Responsibility |
 | --- | --- |
+| `audit` | The append-only trail: in-memory view plus a rotating file |
 | `profile` | Profile types, validation, port and role uniqueness |
 | `store` | `profiles.json` load and save, atomic writes, seeding |
 | `log_watcher` | Turns proxy output into a diagnosis with a fix |

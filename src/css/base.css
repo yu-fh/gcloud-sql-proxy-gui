@@ -32,6 +32,7 @@
 input,
 textarea,
 .logs,
+.log-path,
 .fix-command,
 .banner,
 .notice-body {

@@ -70,7 +70,20 @@
   --green: #1c7c31;
   --orange: #b25000;
 
+  /* Red text sitting *on* --red-bg rather than on a plain surface, which is
+     what an error row in the log pane is. The tint lifts the background, so the
+     plain --red does not necessarily still clear AA on it; this is the value
+     that does at 10-11px. In light mode --red already passes, so the two are
+     the same and the token exists for the dark override below. */
+  --red-on-tint: #d70015;
+
   --logs-bg: #ffffff;
+  /* The alternating row tint in the log pane. Far lighter than a separator
+     would be: at 500 rows a visible rule per record is noise, and this only has
+     to be enough to follow a long line across. */
+  --log-stripe: rgba(60, 60, 67, 0.035);
+  /* The warning row tint, matching how --red-bg relates to --red. */
+  --warn-bg: rgba(178, 80, 0, 0.09);
 
   /* Overlay title bars are ~28px on a standard-density Mac; the extra room
      keeps the window title clear of the traffic lights. */
@@ -117,10 +130,15 @@
 
     --red: #ff453a;
     --red-bg: rgba(255, 69, 58, 0.16);
+    /* --red measured 4.17:1 on --red-bg at 10-11px in WebKit, under AA. This is
+       lightened until it clears 4.5 while staying unmistakably the same red. */
+    --red-on-tint: #ff7a70;
     --green: #30d158;
     --orange: #ff9f0a;
 
     --logs-bg: #1c1c1e;
+    --log-stripe: rgba(235, 235, 245, 0.04);
+    --warn-bg: rgba(255, 159, 10, 0.16);
 
     /* Darker than the window sheet, as AppKit's dark sidebar is. */
     --sidebar-bg: #232325;

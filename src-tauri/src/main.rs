@@ -12,6 +12,7 @@ mod window;
 
 use std::path::{Path, PathBuf};
 
+use fh_cloud_sql_proxy_gui::core::audit::{Category, Logger, SystemInfoInputs};
 use fh_cloud_sql_proxy_gui::core::profile::ProfileConfig;
 use fh_cloud_sql_proxy_gui::core::proxy::ProxyManager;
 use fh_cloud_sql_proxy_gui::core::store;
@@ -30,8 +31,43 @@ fn main() {
 
     let (config, load_error) = load_config(&config_path);
 
-    let manager = ProxyManager::new(proxy_binary());
+    // The audit logger is built first and lives for the whole process: its
+    // writer is a plain OS thread, so it is available before the Tauri runtime
+    // starts and still available while it shuts down -- which is what lets
+    // startup and exit both be recorded.
+    let audit = Logger::at_default_path();
+    audit.info(
+        Category::System,
+        None,
+        format!("--- app starting (pid {}) ---", std::process::id()),
+    );
+    if let Some(message) = &load_error {
+        audit.error(Category::System, None, message.clone());
+    }
+
+    let binary = proxy_binary();
+    let manager = ProxyManager::new(binary.clone()).with_audit(audit.clone());
     let shared = app_state::Shared::new(config, config_path.clone(), manager);
+
+    // Category 3, off the startup path. `sw_vers`, `cloud-sql-proxy --version`
+    // and `gcloud config get-value account` together take on the order of a
+    // second, and a menu bar app whose icon takes a second to appear looks
+    // broken. A detached OS thread rather than a tokio task: the runtime does
+    // not exist yet at this point, and this work is blocking subprocess I/O
+    // that has no business on an async executor anyway.
+    let info_audit = audit.clone();
+    let info_inputs = SystemInfoInputs {
+        app_version: env!("CARGO_PKG_VERSION").to_string(),
+        proxy_binary: binary,
+        config_path: config_path.clone(),
+    };
+    std::thread::Builder::new()
+        .name("audit-system-info".to_string())
+        .spawn(move || info_audit.system_info(&info_inputs))
+        // A machine that cannot spawn a thread has larger problems, and losing
+        // the system-info block is not a reason to refuse to launch.
+        .map(|_| ())
+        .unwrap_or(());
 
     let shared_for_setup = shared.clone();
     let app = tauri::Builder::default()
@@ -50,6 +86,7 @@ fn main() {
             commands::start_profile,
             commands::stop_profile,
             commands::read_logs,
+            commands::reveal_log_file,
         ])
         .setup(move |app| {
             // Menu-bar-only: no Dock icon, no app switcher entry. There is no
@@ -75,12 +112,22 @@ fn main() {
     let on_exit = shared.clone();
     app.run(move |_app, event| {
         if let tauri::RunEvent::Exit = event {
+            on_exit
+                .audit
+                .info(Category::System, None, "--- app exiting ---");
             // A leaked child keeps holding 15432/15433 and breaks the next
             // launch. `kill_on_drop` + `Drop` on `ProxyManager` are a
             // backstop; this is the clean path.
             tauri::async_runtime::block_on(async {
                 on_exit.manager.lock().await.stop_all().await;
             });
+            // The whole point of persisting is surviving the process ending, so
+            // give the writer a bounded moment to land the last records. The
+            // bound matters more than the flush: an app that will not quit is
+            // worse than a log missing its final line.
+            on_exit
+                .audit
+                .flush_blocking(std::time::Duration::from_millis(500));
         }
     });
 }

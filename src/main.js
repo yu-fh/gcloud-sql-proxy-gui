@@ -15,7 +15,7 @@
 
 import { $, note } from './dom.js';
 import { setSelectionListener } from './env-list.js';
-import { loadLogs } from './logs-view.js';
+import { loadLogs, revealLogFile } from './logs-view.js';
 import {
   addProfile,
   deleteProfile,
@@ -48,7 +48,12 @@ $('btn-reload').addEventListener('click', () => {
   loadProfiles();
 });
 $('btn-logs-refresh').addEventListener('click', loadLogs);
+// Both filters re-query the backend rather than filtering the rendered rows:
+// the buffer is capped, so a client-side filter over an already-truncated
+// snapshot would silently hide records that the backend could have returned.
 $('log-filter').addEventListener('change', loadLogs);
+$('log-severity').addEventListener('change', loadLogs);
+$('btn-reveal-log').addEventListener('click', revealLogFile);
 
 wireSidebar();
 // Done is the window's default action, so Return presses it when nothing more

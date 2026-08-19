@@ -183,7 +183,7 @@ export function wireContextMenu() {
       target &&
       (target.tagName === 'INPUT' ||
         target.tagName === 'TEXTAREA' ||
-        target.closest('.logs, .fix-command, .banner, .notice-body'));
+        target.closest('.logs, .log-path, .fix-command, .banner, .notice-body'));
     if (!editable) event.preventDefault();
   });
 }
