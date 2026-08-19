@@ -144,12 +144,12 @@ fn main() {
 ///
 /// Returns the config plus an operator-facing message when the load failed.
 fn load_config(path: &Path) -> (ProfileConfig, Option<String>) {
-    match store::load_or_seed(path) {
+    match store::load_or_init(path) {
         Ok(config) => (config, None),
         Err(error) => (
-            store::seed_profiles(),
+            store::empty_config(),
             Some(format!(
-                "Could not load {}: {error}. Starting with default profiles; \
+                "Could not load {}: {error}. Starting with no environments; \
                  the file on disk was left unchanged and will only be replaced \
                  when you save.",
                 path.display()

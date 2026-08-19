@@ -5,7 +5,7 @@
 
 ## Problem
 
-Connecting to Firsthand's Cloud SQL Postgres databases requires running `cloud-sql-proxy` by hand:
+Connecting to Cloud SQL Postgres databases requires running `cloud-sql-proxy` by hand:
 
 ```bash
 cloud-sql-proxy --auto-iam-authn --private-ip \

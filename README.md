@@ -1,7 +1,10 @@
 # Cloud SQL Proxy GUI
 
-A macOS menu bar app for running `cloud-sql-proxy` against Firsthand's Cloud SQL
+A macOS menu bar app for running `cloud-sql-proxy` against your Cloud SQL
 instances. Click an environment to connect; click it again to disconnect.
+
+You define the environments yourself — the app ships with none. Every project
+ID, connection name and hostname in this README is a placeholder.
 
 ## Why
 
@@ -17,9 +20,9 @@ cloud-sql-proxy --auto-iam-authn --private-ip \
 Three things make that worse than it looks:
 
 - **Switching environments means editing a long command.** The connection names
-  are opaque, and dev, stg, and prd differ only by project.
-- **Connection names go stale.** The `terraform-…` suffix is generated, so when
-  an instance is replaced your working command silently stops working.
+  are opaque, and environments often differ only by project.
+- **Connection names go stale.** Provisioning tools generate the instance name,
+  so when an instance is replaced your working command silently stops working.
 - **Failures are opaque.** Expired credentials, a disconnected VPN, and an
   already-bound port all present as "the proxy is running but I can't connect",
   and telling them apart means reading the proxy's log.
@@ -33,9 +36,10 @@ to run.
 - macOS 11 or later
 - `cloud-sql-proxy` — `brew install cloud-sql-proxy`
 - `gcloud`, authenticated once with `gcloud auth application-default login`
-- Membership in `cloud-sql-users@example.com`
-- The corporate VPN — the instances are private-IP only, so nothing connects
-  without it
+- IAM permission to connect to the instances (typically via a group such as
+  `cloud-sql-users@example.com`)
+- Network reach to the instances — if they are private-IP only, that usually
+  means a VPN, and nothing connects without it
 
 ## Build
 
@@ -84,11 +88,11 @@ the background.
 
 ### First run
 
-The app seeds three environments — dev, stg, and prd — with empty connection
-names, so nothing can start until you fill them in. Open **Profiles…**, set each
-environment's project, and type its connection names into the Primary and Read
-Replica fields. A connection name looks like `project:region:instance`; to find
-them:
+The app starts with no environments — it has no way to guess which projects are
+yours, and a pre-filled environment would invite a connection you never chose.
+Open **Profiles…**, add one per environment you use, then set its project and
+type its connection names into the Primary and Read Replica fields. A connection
+name looks like `project:region:instance`; to find them:
 
 ```sh
 gcloud sql instances list --project=<project> \
@@ -96,20 +100,21 @@ gcloud sql instances list --project=<project> \
 ```
 
 Do the same whenever a connection that used to work starts reporting that the
-instance does not exist. That is Terraform having replaced the instance, which
-regenerates the trailing `terraform-<timestamp>` segment of its connection name.
+instance does not exist — that is the instance having been replaced, which
+changes its connection name. Provisioning tools do this routinely: Terraform,
+for example, names instances with a generated `terraform-<timestamp>` suffix
+that changes every time the instance is recreated.
 
 ### Environments are yours to define
 
-The seeded three are a convenience, not a fixed set. In **Profiles…** you can
-add, rename, and delete environments, mark any of them as production, and set
-their ports and connection names. Ids are stable across a rename, so the app
-never loses track of a running proxy because you retitled it.
+In **Profiles…** you can add, rename, and delete environments, mark any of them
+as production, and set their ports and connection names. Ids are stable across a
+rename, so the app never loses track of a running proxy because you retitled it.
 
 ### Only one environment at a time, by default
 
-Ports follow the team convention: **15432 for the primary, 15433 for the read
-replica**. Every environment defaults to that same pair, so two cannot bind at
+Ports default to **15432 for the primary, 15433 for the read replica**. Every
+environment defaults to that same pair, so two cannot bind at
 once — starting one stops the other, and the app tells you before it does.
 
 That is deliberate. It means your TablePlus, DBeaver, and `psql` settings keep
@@ -130,7 +135,7 @@ making.
 | Port | `15432` (primary) or `15433` (read replica) |
 | User | your Google account email |
 | Password | leave blank — the proxy injects an IAM token |
-| Database | `fh_ui_<env>` or `fh_knowledge_<env>` |
+| Database | whichever database you mean to open |
 | SSL mode | disable — the proxy already wraps the connection in TLS |
 
 Use the replica for heavy read queries.
@@ -147,7 +152,7 @@ The app names the cause rather than showing you a log:
 | Credentials expired | Run `gcloud auth application-default login`. The app offers the command to copy. |
 | Off VPN | Cloud SQL is private-IP only. Connect to the VPN. |
 | Port in use | Another environment or a stray proxy holds it. Stop it, or change this environment's ports. |
-| Instance not found | Terraform replaced it. Look the new connection name up and type it into **Profiles…**. |
+| Instance not found | The instance was replaced. Look the new connection name up and type it into **Profiles…**. |
 
 **Logs…** shows the full audit trail if you need more than that.
 
@@ -211,7 +216,7 @@ standalone:
 | --- | --- |
 | `audit` | The append-only trail: in-memory view plus a rotating file |
 | `profile` | Profile types, validation, port and role uniqueness |
-| `store` | `profiles.json` load and save, atomic writes, seeding |
+| `store` | `profiles.json` load and save, atomic writes |
 | `log_watcher` | Turns proxy output into a diagnosis with a fix |
 | `preflight` | Port, credential, and connection-name checks before spawn |
 | `proxy` | Owns the child processes; kills them on exit |

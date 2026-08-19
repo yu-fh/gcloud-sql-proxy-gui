@@ -577,7 +577,7 @@ pub fn default_config_path() -> Option<PathBuf> {
     })
 }
 
-/// The three known Firsthand environments, with the documented port
+/// The three example environments, with the documented port
 /// convention (15432 primary / 15433 replica) and empty connection names.
 /// Connection names are filled in by discovery, because they contain
 /// Terraform-generated suffixes that change over time.
@@ -2983,7 +2983,7 @@ git commit -m "Fix issues found in end-to-end verification"
 # Cloud SQL Proxy GUI
 
 A macOS menu bar app for starting and stopping `cloud-sql-proxy` against
-Firsthand's dev, stg, and prd Cloud SQL instances.
+your dev, stg, and prd Cloud SQL instances.
 
 ## Why
 

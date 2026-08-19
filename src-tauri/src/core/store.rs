@@ -1,6 +1,6 @@
 //! JSON-backed persistence for [`ProfileConfig`]: default path resolution,
-//! seeding a fresh config with the three standard environments, and
-//! load/save with validation and atomic writes.
+//! initialising a fresh empty config, and load/save with validation and
+//! atomic writes.
 //!
 //! This module has no Tauri dependency and is unit-testable standalone.
 
@@ -89,51 +89,39 @@ pub fn new_profile(name: &str, taken_ids: &[String]) -> Profile {
     standard_profile(&id, name, "", false, None)
 }
 
-/// The first-run seed: dev, stg, prd, each with a primary (15432) and replica
-/// (15433) instance and an empty connection name -- the user fills those in
-/// from the Profiles window.
+/// An empty config, at the current schema version.
 ///
-/// This is a convenience, not a fixed set: the user can rename, delete, or add
-/// to these freely. Nothing in the app keys off these particular names.
-pub fn seed_profiles() -> ProfileConfig {
+/// This is what a first run starts from, and it is deliberately **empty**
+/// rather than a set of starter profiles. An earlier version seeded `dev`,
+/// `stg` and `prd` pre-filled with one particular deployment's projects and
+/// probe hosts, which suited that deployment and nobody else: this is a
+/// general-purpose tool, so there is no project it could seed that would be
+/// right for the person running it. Stripped of those values the seeds were
+/// three blank rows asserting a naming convention the user may not share, and
+/// rows they would have to delete.
+///
+/// A profile that arrives pre-filled is also the trap `new_profile` avoids: it
+/// looks configured, so it invites a Connect against a project the user never
+/// chose. The front end already renders an empty environment list as "No
+/// environments." beside the + button, so starting empty needs no other
+/// handling.
+pub fn empty_config() -> ProfileConfig {
     ProfileConfig {
         version: CURRENT_SCHEMA_VERSION,
-        profiles: vec![
-            standard_profile(
-                "dev",
-                "dev",
-                "my-project-dev",
-                false,
-                Some("pg.dev.internal.example.com"),
-            ),
-            standard_profile(
-                "stg",
-                "stg",
-                "my-project-stg",
-                false,
-                Some("pg.stg.internal.example.com"),
-            ),
-            standard_profile(
-                "prd",
-                "prd",
-                "my-project-prd",
-                true,
-                Some("pg.prd.internal.example.com"),
-            ),
-        ],
+        profiles: Vec::new(),
     }
 }
 
-/// Load the config at `path`, seeding and writing a fresh default config if
-/// the file does not yet exist.
+/// Load the config at `path`, writing a fresh empty config if the file does
+/// not yet exist.
 ///
 /// A file that exists but fails to parse as JSON, or parses but fails
 /// [`ProfileConfig::validate`], is always an error -- it is never silently
 /// replaced. Overwriting a user's (possibly hand-edited) config on a parse
 /// bug would be a silent data-loss bug.
-pub fn load_or_seed(path: &Path) -> Result<ProfileConfig, StoreError> {
+pub fn load_or_init(path: &Path) -> Result<ProfileConfig, StoreError> {
     if !path.exists() {
-        let config = seed_profiles();
+        let config = empty_config();
         save(path, &config)?;
         return Ok(config);
     }
@@ -186,20 +174,35 @@ pub fn save(path: &Path, config: &ProfileConfig) -> Result<(), StoreError> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn seed_has_three_environments_in_order() {
-        let cfg = seed_profiles();
-        let ids: Vec<&str> = cfg.profiles.iter().map(|p| p.id.as_str()).collect();
-        assert_eq!(ids, vec!["dev", "stg", "prd"]);
+    /// Three profiles built the way the UI builds them, for the tests that
+    /// need a populated config. This stands in for the starter profiles an
+    /// earlier version shipped; see `empty_config` on why nothing is seeded.
+    fn three_profiles() -> ProfileConfig {
+        let mut config = empty_config();
+        for (id, danger) in [("dev", false), ("stg", false), ("prd", true)] {
+            config
+                .profiles
+                .push(standard_profile(id, id, "", danger, None));
+        }
+        config
     }
 
     #[test]
-    fn seed_profiles_all_use_standard_ports() {
-        let cfg = seed_profiles();
-        for profile in &cfg.profiles {
+    fn a_fresh_config_has_no_profiles() {
+        // The whole point of not seeding: a first run presents an empty list,
+        // not someone else's environments.
+        let cfg = empty_config();
+        assert!(cfg.profiles.is_empty());
+        assert_eq!(cfg.version, CURRENT_SCHEMA_VERSION);
+        assert_eq!(cfg.validate(), Ok(()));
+    }
+
+    #[test]
+    fn new_profiles_all_use_standard_ports() {
+        for profile in &three_profiles().profiles {
             assert_eq!(
                 profile.ports(),
-                vec![15432, 15433],
+                vec![DEFAULT_PRIMARY_PORT, DEFAULT_REPLICA_PORT],
                 "profile {}",
                 profile.id
             );
@@ -207,48 +210,13 @@ mod tests {
     }
 
     #[test]
-    fn seed_marks_only_prd_as_danger() {
-        let cfg = seed_profiles();
-        for profile in &cfg.profiles {
-            let expected_danger = profile.id == "prd";
-            assert_eq!(profile.danger, expected_danger, "profile {}", profile.id);
-        }
-    }
-
-    #[test]
-    fn seed_connection_names_are_empty() {
-        let cfg = seed_profiles();
-        for profile in &cfg.profiles {
-            for instance in &profile.instances {
-                assert_eq!(instance.connection_name, "", "profile {}", profile.id);
-            }
-        }
-    }
-
-    #[test]
-    fn seed_is_valid_and_all_profiles_mutually_conflict() {
-        // This is the exclusive-by-default invariant: dev/stg/prd all reuse
-        // 15432/15433, so the seeded config must validate cleanly while also
-        // reporting that every pair of profiles shares both ports.
-        let cfg = seed_profiles();
+    fn profiles_sharing_the_standard_ports_all_mutually_conflict() {
+        // The exclusive-by-default invariant: profiles created through the UI
+        // all reuse 15432/15433, so such a config must validate cleanly while
+        // still reporting that every pair shares both ports.
+        let cfg = three_profiles();
         assert_eq!(cfg.validate(), Ok(()));
         assert_eq!(cfg.conflicting_ports().len(), 6);
-    }
-
-    #[test]
-    fn seed_profiles_carry_a_vpn_probe_host() {
-        // The probe host used to be derived from the profile name; it is now
-        // an explicit field, so the seeded three must still carry theirs or
-        // the diagnostic silently regresses for existing users.
-        let cfg = seed_profiles();
-        for profile in &cfg.profiles {
-            assert_eq!(
-                profile.vpn_probe_host,
-                Some(format!("pg.{}.internal.example.com", profile.id)),
-                "profile {}",
-                profile.id
-            );
-        }
     }
 
     #[test]
@@ -267,7 +235,7 @@ mod tests {
 
     #[test]
     fn new_profile_avoids_ids_already_in_the_config() {
-        let cfg = seed_profiles();
+        let cfg = three_profiles();
         let taken: Vec<String> = cfg.profiles.iter().map(|p| p.id.clone()).collect();
 
         let p = new_profile("dev", &taken);
@@ -281,7 +249,7 @@ mod tests {
     }
 
     #[test]
-    fn load_or_seed_accepts_a_config_written_before_vpn_probe_host_existed() {
+    fn load_or_init_accepts_a_config_written_before_vpn_probe_host_existed() {
         // Backward compatibility at the file level: an existing profiles.json
         // with no vpnProbeHost anywhere must load rather than erroring, which
         // is what #[serde(default)] on the field buys.
@@ -310,44 +278,46 @@ mod tests {
         )
         .expect("write legacy config");
 
-        let cfg = load_or_seed(&path).expect("legacy config should still load");
+        let cfg = load_or_init(&path).expect("legacy config should still load");
         assert_eq!(cfg.profiles.len(), 1);
         assert_eq!(cfg.profiles[0].vpn_probe_host, None);
         assert_eq!(cfg.profiles[0].ports(), vec![15432, 15433]);
     }
 
     #[test]
-    fn load_or_seed_creates_file_when_missing() {
+    fn load_or_init_creates_file_when_missing() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("profiles.json");
         assert!(!path.exists());
 
-        let cfg = load_or_seed(&path).expect("load_or_seed");
+        let cfg = load_or_init(&path).expect("load_or_init");
 
+        // The file is created so later saves have a target, but it holds no
+        // profiles: a first run starts empty. See `empty_config`.
         assert!(path.exists());
-        assert_eq!(cfg.profiles.len(), 3);
+        assert!(cfg.profiles.is_empty());
     }
 
     #[test]
-    fn save_then_load_or_seed_round_trips_unchanged() {
+    fn save_then_load_or_init_round_trips_unchanged() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("profiles.json");
 
-        let original = seed_profiles();
+        let original = three_profiles();
         save(&path, &original).expect("save");
 
-        let loaded = load_or_seed(&path).expect("load_or_seed");
+        let loaded = load_or_init(&path).expect("load_or_init");
         assert_eq!(loaded, original);
     }
 
     #[test]
-    fn load_or_seed_rejects_malformed_json_and_leaves_file_untouched() {
+    fn load_or_init_rejects_malformed_json_and_leaves_file_untouched() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("profiles.json");
         let garbage = "{ this is not valid json";
         std::fs::write(&path, garbage).expect("write garbage");
 
-        let result = load_or_seed(&path);
+        let result = load_or_init(&path);
         assert!(matches!(result, Err(StoreError::Parse(_))));
 
         let contents = std::fs::read_to_string(&path).expect("read back");
@@ -355,12 +325,12 @@ mod tests {
     }
 
     #[test]
-    fn load_or_seed_rejects_future_schema_version() {
+    fn load_or_init_rejects_future_schema_version() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("profiles.json");
         std::fs::write(&path, r#"{"version": 99, "profiles": []}"#).expect("write");
 
-        let result = load_or_seed(&path);
+        let result = load_or_init(&path);
         assert!(matches!(
             result,
             Err(StoreError::Invalid(ValidationError::UnsupportedVersion {
@@ -374,7 +344,7 @@ mod tests {
     fn save_leaves_no_tmp_file_behind() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("profiles.json");
-        save(&path, &seed_profiles()).expect("save");
+        save(&path, &three_profiles()).expect("save");
 
         // Assert on the whole directory rather than one expected temp name:
         // a name-specific check passes even when a differently-named temp
@@ -401,10 +371,10 @@ mod tests {
         // First write the full three-environment config, then overwrite with a
         // shorter one. A non-atomic write could leave trailing bytes of the
         // longer JSON behind, producing invalid output.
-        save(&path, &seed_profiles()).expect("save long");
+        save(&path, &three_profiles()).expect("save long");
         let long_len = std::fs::read(&path).expect("read long").len();
 
-        let mut short = seed_profiles();
+        let mut short = three_profiles();
         short.profiles.truncate(1);
         save(&path, &short).expect("save short");
 
@@ -420,7 +390,7 @@ mod tests {
         let path = dir.path().join("nested").join("dirs").join("profiles.json");
         assert!(!path.parent().unwrap().exists());
 
-        save(&path, &seed_profiles()).expect("save");
+        save(&path, &three_profiles()).expect("save");
 
         assert!(path.exists());
     }
@@ -430,7 +400,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("profiles.json");
 
-        let mut bad = seed_profiles();
+        let mut bad = three_profiles();
         // Force a duplicate port within the first profile's instances.
         bad.profiles[0].instances[1].port = bad.profiles[0].instances[0].port;
 
