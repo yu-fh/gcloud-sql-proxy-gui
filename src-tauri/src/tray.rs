@@ -532,18 +532,59 @@ fn appearance<R: Runtime>(_app: &AppHandle<R>, _fallback: Appearance) -> Appeara
 /// `design/tray-source/`; the dark-menu-bar set is the designer's delivery
 /// copied verbatim, the light-menu-bar set is its mechanical recolour.
 ///
-/// **These are the 18px assets, not the 36px `@2x` ones,** and that is the one
-/// choice here most likely to ship a visibly broken icon if reversed. The
-/// designer's README recommends 18px for 1x and 36px for @2x, but that pairing
-/// only means anything to an API that takes both and picks per display.
-/// `Image::from_bytes` is not that API: it knows nothing about `@2x`, reads
-/// whatever pixel dimensions the PNG declares, and hands them to the menu bar
-/// at face value. A 36px image therefore fills the ~22pt slot edge to edge and
-/// reads as a solid block rather than a mark — exactly the bug the previous
-/// icon set hit by embedding its 44px variant instead of its 22px one. The
-/// 24px and 48px variants are omitted for the same reason: nothing here can
-/// use them, and an unused asset in the tree is an invitation to wire up the
-/// wrong one.
+/// **These are the 36px `@2x` assets**, which is the designer's README
+/// recommendation and — unlike the 18px set that used to be here — the size that
+/// actually renders sharply.
+///
+/// # Pixels are backing store, not points
+///
+/// An earlier version of this comment claimed the opposite: that the menu bar
+/// takes a PNG's declared pixel size at face value, so a 36px asset would fill
+/// the ~22pt slot edge to edge and read as a solid block. That was inherited from
+/// a different, earlier icon set and never re-checked against this artwork. It is
+/// false, and the reason is one hardcoded constant.
+///
+/// `Image::from_bytes` only carries the RGBA buffer and its dimensions. The path
+/// on to the screen is `tauri::image::Image` -> `tray_icon::Icon` ->
+/// `NSStatusItem.button.image`, and `tray-icon` 0.24.2's
+/// `set_icon_for_ns_status_item_button` does this to every image it is handed,
+/// on both the builder path and `set_icon`:
+///
+/// ```text
+/// let icon_height: f64 = 18.0;
+/// let icon_width: f64 = (width as f64) / (height as f64 / icon_height);
+/// nsimage.setSize(NSSize::new(icon_width, icon_height));
+/// ```
+///
+/// The point size is therefore **always 18pt high**; the PNG's pixel dimensions
+/// set only the aspect ratio and, because `NSImage` keeps the pixels it was
+/// decoded from as its representation, the backing-store density. Probing the
+/// live `NSImage` off `NSStatusBarButton` confirmed it directly:
+///
+/// | embedded PNG | `NSStatusBar.thickness` | `NSImage.size` | representation |
+/// |--------------|-------------------------|----------------|----------------|
+/// | 18x18        | 22                      | 18x18 pt       | 18x18 px (1x)  |
+/// | 36x36        | 22                      | 18x18 pt       | 36x36 px (2x)  |
+/// | 44x44        | 22                      | 18x18 pt       | 44x44 px       |
+///
+/// Nothing overflows at any size. So the 18px set was not "correctly sized" — it
+/// was a 1x asset on a Retina display, which is exactly the softness a user
+/// comparing it against a neighbouring menu bar icon reports as "small and
+/// blurry".
+///
+/// # What this does and does not fix
+///
+/// It fixes the blur: 36px is a pixel-exact 2x for an 18pt image. It does **not**
+/// change how much of the slot the glyph occupies, because 18 of the 22pt is
+/// `tray-icon`'s hardcoded choice and is not reachable from here. Embedding a
+/// larger asset cannot raise it; only patching or replacing that crate's macOS
+/// backend, or setting the size on the `NSImage` ourselves afterwards, could. If
+/// the glyph still reads as small next to its neighbours, that constant — not
+/// this asset size — is the thing to change.
+///
+/// The 24px and 48px variants are omitted: nothing here can use them, and an
+/// unused asset in the tree is an invitation to wire up the wrong one.
+///
 /// The dark-menu-bar set: the designer's artwork as delivered, white ink.
 const TRAY_ICON_DISCONNECTED: &[u8] = include_bytes!("../icons/tray-disconnected.png");
 const TRAY_ICON_CONNECTING: &[u8] = include_bytes!("../icons/tray-connecting.png");
@@ -562,9 +603,9 @@ const TRAY_ICON_ERROR_LIGHT: &[u8] = include_bytes!("../icons/tray-error-light.p
 ///
 /// Split out from [`tray_icon`] so the mapping can be tested without a Tauri
 /// runtime: the tests walk all eight pairs and assert both that each decodes to
-/// 18x18 and that no two pairs share an asset. A copy-paste slip that pointed
-/// two states at one image would otherwise be invisible — the tray still shows
-/// *an* icon.
+/// exactly `TRAY_ICON_PX` square and that no two pairs share an asset. A
+/// copy-paste slip that pointed two states at one image would otherwise be
+/// invisible — the tray still shows *an* icon.
 fn tray_icon_bytes(state: IconState, appearance: Appearance) -> &'static [u8] {
     match (state, appearance) {
         (IconState::Disconnected, Appearance::Dark) => TRAY_ICON_DISCONNECTED,
@@ -1223,7 +1264,7 @@ mod tests {
         assert_eq!(snapshot.icon_state(), IconState::Connecting);
     }
 
-    // The per-asset checks (decodes, 18x18, all eight distinct) live at the
+    // The per-asset checks (decodes, exact 2x size, all eight distinct) live at the
     // bottom of this module with `ALL_PAIRS`, so they cover the appearance
     // dimension as well as the state one.
 
@@ -1373,6 +1414,14 @@ mod tests {
         }
     }
 
+    /// The pixel size every embedded tray asset must be.
+    ///
+    /// Kept as an exact number rather than a lower bound because that is what
+    /// would have caught the 18px regression: an asset silently at 1x is not a
+    /// decode failure and not visible in a diff, it is just soft. `TRAY_SIZE` in
+    /// `design/generate-icons.py` is the same number on the generating side.
+    const TRAY_ICON_PX: u32 = 36;
+
     /// Every (state, appearance) pair the tray can ask for.
     const ALL_PAIRS: [(IconState, Appearance); 8] = [
         (IconState::Disconnected, Appearance::Dark),
@@ -1398,17 +1447,19 @@ mod tests {
     }
 
     #[test]
-    fn every_tray_asset_is_exactly_18x18() {
-        // The size the menu bar takes at face value. A 36px asset -- the `@2x`
-        // variant the designer's README suggests -- fills the ~22pt slot and
-        // renders as a solid block; a previous iteration shipped that bug with a
-        // 44px asset. See the comment on the `include_bytes!` block.
+    fn every_tray_asset_is_exactly_the_2x_size() {
+        // Exact, not a minimum, and that is the point: `tray-icon` draws whatever
+        // it is handed at a hardcoded 18pt, so an asset at the wrong size is never
+        // a decode failure and never visibly broken in review — it is silently
+        // soft. The 18px set that used to be here was a 1x asset on a Retina
+        // display, which is what "small and blurry" was. See the comment on the
+        // `include_bytes!` block for the measurements.
         for (state, appearance) in ALL_PAIRS {
             let bytes = tray_icon_bytes(state, appearance);
             assert_eq!(
                 png_dimensions(bytes),
-                (18, 18),
-                "{} / {} is not 18x18",
+                (TRAY_ICON_PX, TRAY_ICON_PX),
+                "{} / {} is not {TRAY_ICON_PX}x{TRAY_ICON_PX}",
                 state.as_str(),
                 appearance.as_str()
             );
@@ -1416,7 +1467,7 @@ mod tests {
     }
 
     #[test]
-    fn every_tray_asset_decodes_at_18x18() {
+    fn every_tray_asset_decodes_at_the_2x_size() {
         // A corrupt embed would leave the tray falling back to a text title,
         // which is a silent degradation nobody would notice in review. The
         // dimensions are re-checked here on the *decoded* image rather than the
@@ -1432,8 +1483,8 @@ mod tests {
             });
             assert_eq!(
                 (icon.width(), icon.height()),
-                (18, 18),
-                "decoded {} / {} is not 18x18",
+                (TRAY_ICON_PX, TRAY_ICON_PX),
+                "decoded {} / {} is not {TRAY_ICON_PX}x{TRAY_ICON_PX}",
                 state.as_str(),
                 appearance.as_str()
             );

@@ -31,43 +31,82 @@ regenerate them after the designer redelivers or the ink choice changes; do not
 hand-edit the PNGs.
 """
 import hashlib
+import re
 import subprocess
 from pathlib import Path
 
 OUT = Path(__file__).parent / "final"
 OUT.mkdir(exist_ok=True)
 
-BRACKETS = """<path d="M34 24 L20 24 L20 76 L34 76"/>
-    <path d="M66 24 L80 24 L80 76 L66 76"/>"""
+# The app icon: the designer's database glyph on a dark tile, matching the
+# design sheet. Derived from the same `connected.svg` the tray uses, so the two
+# icons cannot drift — an app icon that looks unrelated to its menu bar icon is
+# the kind of mismatch nobody reports but everybody notices.
+#
+# Three adjustments the tray artwork needs at tile size, each because a menu
+# bar and an app icon are looked at differently:
+#
+# 1. Layer opacities are lifted (0.38/0.52/0.66 -> 0.62/0.78/0.94). The menu
+#    bar values are deliberately faint so the mark recedes; at 1024 that same
+#    faintness reads as a smudge rather than three distinct plates.
+# 2. The glyph is centred on its *ink*, not its viewBox. The plates occupy
+#    roughly x 3.5-13.5, y 2-14 of the 18x18 box, so centring the box leaves
+#    the artwork visibly high and left.
+# 3. The status dot is tucked in and shrunk. At 18px it is large and clear of
+#    the plates so it survives rasterisation; reproduced proportionally on a
+#    tile it reads as a bubble glued to the corner.
+#
+# The tile is a blue-shifted graphite rather than flat grey — dark like the
+# design sheet, but with enough hue not to read as inert. It is deliberately
+# NOT transparent: Big Sur onward a macOS app icon is a rounded tile, and a
+# transparent one looks broken in Finder rather than minimal.
+APP_TILE_TOP = "#3E4552"
+APP_TILE_BOTTOM = "#1B1F26"
+APP_LIFT = {
+    "0.38": "0.62", "0.52": "0.78", "0.66": "0.94",
+    "0.22": "0.40", "0.28": "0.46", "0.34": "0.52",
+}
+APP_SCALE = 34
+# Ink centre in glyph units, from the plate geometry plus the tucked-in dot.
+APP_INK_CX, APP_INK_CY = 9.1, 8.4
 
-# The app icon. Blue-to-indigo reads as "infrastructure" without being the
-# generic macOS-utility grey, and the mark stays legible when Finder shrinks
-# it to 16px.
-#
-# The first version drew a heavy pure-white mark on a mid blue and read as a
-# white slab. Three things fixed that, and all three matter together: the tile
-# goes deeper (#1E3A8A at the foot rather than #2B5BD7), the mark is inset
-# further and drawn thinner (scale 5.6 / stroke 7.5, was 6.4 / 9), and it is
-# near-white rather than #FFF. Pure white against a saturated tile glares; the
-# slight tint is what Apple's own utility icons do.
-#
-# It is deliberately NOT transparent. Big Sur onward, a macOS app icon is a
-# rounded tile — a transparent one looks broken in Finder, not minimal.
-APP = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+APP_TILE = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#3D7BF0"/>
-      <stop offset="100%" stop-color="#1E3A8A"/>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="{top}"/>
+      <stop offset="100%" stop-color="{bottom}"/>
     </linearGradient>
   </defs>
-  <rect x="92" y="92" width="840" height="840" rx="188" fill="url(#bg)"/>
-  <g transform="translate(232,232) scale(5.6)"
-     fill="none" stroke="#E8F0FE" stroke-width="7.5"
-     stroke-linecap="round" stroke-linejoin="round">
-    {brackets}
+  <rect x="92" y="92" width="840" height="840" rx="188" fill="url(#tile)"/>
+  <g transform="translate({ox},{oy}) scale({scale})">
+    {glyph}
   </g>
-  <circle cx="512" cy="512" r="70" fill="#E8F0FE"/>
 </svg>"""
+
+
+def app_icon_svg() -> str:
+    """Compose the app icon from the designer's `connected` tray artwork."""
+    source = (Path(__file__).parent / "tray-source" / "connected.svg").read_text()
+    glyph = source.split("<g>", 1)[1].rsplit("</g>", 1)[0]
+
+    def lift(match: re.Match) -> str:
+        attr, value = match.group(1), match.group(2)
+        return f'{attr}="{APP_LIFT.get(value, value)}"'
+
+    glyph = re.sub(r'(fill-opacity|stroke-opacity)="([0-9.]+)"', lift, glyph)
+    glyph = glyph.replace(
+        'cx="14.7" cy="14.1" r="2.05"',
+        'cx="12.6" cy="12.2" r="1.5"',
+    )
+
+    return APP_TILE.format(
+        top=APP_TILE_TOP,
+        bottom=APP_TILE_BOTTOM,
+        glyph=glyph,
+        ox=round(512 - APP_INK_CX * APP_SCALE, 1),
+        oy=round(512 - APP_INK_CY * APP_SCALE, 1),
+        scale=APP_SCALE,
+    )
 
 
 def rasterise(svg_path: Path, png_path: Path, size: int) -> Path:
@@ -119,14 +158,14 @@ def render(stem: str, svg: str, size: int) -> Path:
 # template image is flattened to a black silhouette and would discard both the
 # translucency and the red error dot. So a second set is derived here.
 #
-# The derivation works on the designer's rasterised 18px PNGs, not on the SVGs.
-# That is deliberate. Rasterising the SVGs here would need a rasteriser this
-# machine does not reliably have -- `rsvg-convert` is not installed and
-# `qlmanage` flattens alpha onto opaque white -- and would risk the derived
-# geometry drifting from the delivered geometry. The PNGs already carry the
-# artwork exactly: pure white RGB with every layer opacity, every overlap, and
-# all the antialiasing resolved into the alpha channel. Recolouring those is a
-# per-pixel operation that cannot move an edge.
+# The derivation works on the designer's rasterised PNGs, not on the SVGs. That
+# is deliberate. Rasterising the SVGs here would need a rasteriser this machine
+# does not reliably have -- `rsvg-convert` is not installed and `qlmanage`
+# flattens alpha onto opaque white -- and would risk the derived geometry drifting
+# from the delivered geometry. The PNGs already carry the artwork exactly: pure
+# white RGB with every layer opacity, every overlap, and all the antialiasing
+# resolved into the alpha channel. Recolouring those is a per-pixel operation that
+# cannot move an edge.
 
 TRAY_SRC = Path(__file__).parent / "tray-source"
 TRAY_OUT = Path(__file__).parent.parent / "src-tauri" / "icons"
@@ -137,12 +176,45 @@ TRAY_OUT = Path(__file__).parent.parent / "src-tauri" / "icons"
 # the note on `IconState` in `tray.rs`.
 TRAY_STATES = ("disconnected", "connecting", "connected", "error")
 
-# The size the code embeds, and the only size built. `Image::from_bytes` knows
-# nothing about the `@2x` filename convention: it reads the PNG's declared
-# dimensions and hands them to the ~22pt menu bar slot at face value, so a 36px
-# asset fills the slot and renders as a solid block. See the comment on the
-# `include_bytes!` block in `tray.rs`.
-TRAY_SIZE = 18
+# The size the code embeds: the designer's `@2x` size, and the right one.
+#
+# An earlier iteration of this file asserted 18px on the theory that the menu bar
+# takes a PNG's declared pixel size at face value, so a 36px asset would fill the
+# ~22pt slot and read as a solid block. That was measured and is false. The path
+# is `tauri::image::Image` -> `tray_icon::Icon` -> `NSStatusItem.button.image`,
+# and `tray-icon`'s macOS backend (0.24.2,
+# `set_icon_for_ns_status_item_button`) hardcodes the point size:
+#
+#     let icon_height: f64 = 18.0;
+#     let icon_width: f64 = (width as f64) / (height as f64 / icon_height);
+#     nsimage.setSize(NSSize::new(icon_width, icon_height));
+#
+# The PNG's pixel dimensions therefore set only the *aspect ratio* and the
+# backing-store density; the drawn size is 18pt regardless. Probing the live
+# `NSImage` confirmed it: an 18px asset gives `size = 18x18 pt` with a `18x18 px`
+# representation (1x -- soft on a Retina display), and a 36px asset gives the
+# same `18x18 pt` with a `36x36 px` representation (2x -- crisp). Nothing
+# overflows and nothing is a solid block.
+#
+# So 36px is exactly the designer's README recommendation ("18px for 1x, 36px for
+# @2x"), and it is the @2x asset that this Retina-only target wants. Note the
+# 18pt drawn height is `tray-icon`'s choice, not ours: it cannot be raised from
+# here, so the glyph occupies 18 of the 22pt slot whatever we embed. Size is
+# fixed; sharpness is what this buys.
+TRAY_SIZE = 36
+
+# The designer ships 18/24/36/48px per state, so 36px is taken directly from the
+# delivery rather than resampled from the 48px one.
+#
+# That was measured rather than assumed, because "downscale from the largest
+# source" is the usual advice and here it is the worse option. Counting distinct
+# non-zero alpha values -- a proxy for how much antialiasing detail survives --
+# the designer's native 36px export beats a `sips` 48 -> 36 downscale on every
+# state: 218 vs 210 (connected), 215 vs 212 (connecting), 204 vs 194
+# (disconnected), 218 vs 210 (error). The designer rasterised each size from the
+# vector artwork independently, so the 36px export has never been through a
+# resampling filter; a downscale of the 48px one has. Straight copy wins.
+TRAY_SOURCE_SIZE = 36
 
 # macOS's two menu bar backgrounds, and the ink used against each.
 DARK_BG = (0x1C, 0x1C, 0x1E)
@@ -266,6 +338,9 @@ def tray_light_variant(source: Path, dest: Path) -> Path:
 
     lut = tray_alpha_map()
     pixels = []
+    # `get_flattened_data`, not `getdata`: Pillow 12 deprecated the latter (it
+    # warns, and goes away in Pillow 14) and this is its replacement. Both return
+    # the same flat sequence of RGBA tuples.
     for r, g, b, a in image.get_flattened_data():
         if a == 0:
             pixels.append((0, 0, 0, 0))
@@ -286,10 +361,11 @@ def assert_square(png: Path, size: int) -> None:
     """Fail loudly if an asset is not exactly `size` x `size`.
 
     The IHDR width/height are big-endian u32 at a fixed offset in every PNG, so
-    this needs no image library. Wrong dimensions here are the single most
-    likely way to ship a visibly broken tray icon and are not visible in a diff:
-    the menu bar takes the declared size at face value, so a 36px asset renders
-    as a solid block.
+    this needs no image library. Wrong dimensions here are not visible in a diff
+    and degrade quietly rather than loudly: `tray-icon` draws whatever it is given
+    at 18pt, so an 18px asset is not broken -- just soft, at 1x on a Retina
+    display, which is the bug this size exists to fix. `tray.rs` asserts the same
+    number on the embedded bytes.
     """
     header = png.read_bytes()[16:24]
     width = int.from_bytes(header[:4], "big")
@@ -309,7 +385,7 @@ def build_tray() -> list:
     """
     written = []
     for state in TRAY_STATES:
-        source = TRAY_SRC / f"{state}-18px.png"
+        source = TRAY_SRC / f"{state}-{TRAY_SOURCE_SIZE}px.png"
         dark = TRAY_OUT / f"tray-{state}.png"
         dark.write_bytes(source.read_bytes())
         written.append(dark)
@@ -337,7 +413,7 @@ def build_tray() -> list:
 
 if __name__ == "__main__":
     # App icon master. `tauri icon` derives every other size from it.
-    render("app-icon", APP.format(brackets=BRACKETS), 1024)
+    render("app-icon", app_icon_svg(), 1024)
     print("final icons:", sorted(p.name for p in OUT.glob("*.png")))
 
     # Tray: the designer's artwork installed as-is for a dark menu bar, plus the
