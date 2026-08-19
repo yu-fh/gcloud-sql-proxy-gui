@@ -21,8 +21,16 @@ OUT.mkdir(exist_ok=True)
 BRACKETS = """<path d="M34 24 L20 24 L20 76 L34 76"/>
     <path d="M66 24 L80 24 L80 76 L66 76"/>"""
 
+# The menu bar mark is hinted for 22px rather than being the app mark scaled
+# down. At 22 the app geometry crowds the node against the brackets and the
+# hollow centre closes up into a blob. Hinting means: brackets pushed to the
+# edges with shorter feet, thicker strokes, and a larger node with a thicker
+# ring so the hole survives rasterisation.
+MENUBAR_BRACKETS = """<path d="M32 18 L16 18 L16 82 L32 82"/>
+    <path d="M68 18 L84 18 L84 82 L68 82"/>"""
+
 MENUBAR = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
-  <g fill="none" stroke="#000000" stroke-width="9"
+  <g fill="none" stroke="#000000" stroke-width="12"
      stroke-linecap="round" stroke-linejoin="round">
     {brackets}
     {node_stroke}
@@ -30,8 +38,8 @@ MENUBAR = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
   {node_fill}
 </svg>"""
 
-IDLE_NODE_STROKE = '<circle cx="50" cy="50" r="9"/>'
-ACTIVE_NODE_FILL = '<circle cx="50" cy="50" r="14" fill="#000000"/>'
+IDLE_NODE_STROKE = '<circle cx="50" cy="50" r="11"/>'
+ACTIVE_NODE_FILL = '<circle cx="50" cy="50" r="17" fill="#000000"/>'
 
 # The app icon. Blue-to-indigo reads as "infrastructure" without being the
 # generic macOS-utility grey, and the mark stays legible when Finder shrinks
@@ -86,17 +94,21 @@ def render(stem: str, svg: str, size: int) -> Path:
 
 if __name__ == "__main__":
     idle = MENUBAR.format(
-        brackets=BRACKETS, node_stroke=IDLE_NODE_STROKE, node_fill=""
+        brackets=MENUBAR_BRACKETS, node_stroke=IDLE_NODE_STROKE, node_fill=""
     )
     active = MENUBAR.format(
-        brackets=BRACKETS, node_stroke="", node_fill=ACTIVE_NODE_FILL
+        brackets=MENUBAR_BRACKETS, node_stroke="", node_fill=ACTIVE_NODE_FILL
     )
 
-    # Menu bar template images: 1x and 2x for the 22pt slot.
+    # Menu bar template images at 22px only.
+    #
+    # No `@2x` variant: `Image::from_bytes` in tray.rs knows nothing about the
+    # filename convention and hands whatever pixel size it finds straight to
+    # the menu bar, so a 44px asset fills the 22pt slot edge to edge and reads
+    # as a solid block. Shipping only the size the code embeds removes the
+    # chance of wiring up the wrong one.
     render("trayTemplate", idle, 22)
-    render("trayTemplate@2x", idle, 44)
     render("trayActiveTemplate", active, 22)
-    render("trayActiveTemplate@2x", active, 44)
 
     # App icon master. `tauri icon` derives every other size from this.
     render("app-icon", APP.format(brackets=BRACKETS), 1024)

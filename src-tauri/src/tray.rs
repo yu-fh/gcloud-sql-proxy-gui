@@ -312,10 +312,17 @@ fn build_menu<R: Runtime>(
 /// installed bundle resolve resource paths differently, and an icon that
 /// silently fails to load leaves an invisible tray.
 ///
-/// Both are template images (pure black on transparent) at 2x for the 22pt
-/// slot. macOS handles light/dark inversion and the menu-open highlight.
-const TRAY_ICON_IDLE: &[u8] = include_bytes!("../icons/trayTemplate@2x.png");
-const TRAY_ICON_ACTIVE: &[u8] = include_bytes!("../icons/trayActiveTemplate@2x.png");
+/// Both are template images: pure black on transparent, so macOS handles
+/// light/dark inversion and the menu-open highlight. On a dark menu bar the
+/// system renders them white — that is the mechanism working, not a bug.
+///
+/// These are the 22px assets, not the `@2x` ones. `Image::from_bytes` knows
+/// nothing about the `@2x` filename convention: it sees whatever pixel
+/// dimensions the PNG declares and hands them to the menu bar at face value,
+/// so a 44px image fills the 22pt slot edge to edge and reads as a solid
+/// block rather than a mark.
+const TRAY_ICON_IDLE: &[u8] = include_bytes!("../icons/trayTemplate.png");
+const TRAY_ICON_ACTIVE: &[u8] = include_bytes!("../icons/trayActiveTemplate.png");
 
 /// Decode the icon for the given connected state.
 ///
