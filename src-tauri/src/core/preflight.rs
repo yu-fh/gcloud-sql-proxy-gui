@@ -93,8 +93,8 @@ pub fn vpn_reachable(host: &str, port: u16) -> Option<bool> {
 /// 2. If `adc` is `Some(path)`, the ADC file must exist at `path` (pass
 ///    `None` to skip this check entirely — e.g. a caller that already knows
 ///    it wants to skip credential checking).
-/// 3. Every instance must have a non-empty `connection_name` (seeded
-///    profiles start with empty names until gcloud discovery fills them in).
+/// 3. Every instance must have a non-empty `connection_name` (seeded and
+///    newly added profiles start empty until the user types them in).
 ///
 /// Deliberately NOT checked here: VPN reachability. [`vpn_reachable`] does a
 /// network probe with a ~1.5s timeout, which is both slow to run on every
@@ -133,7 +133,9 @@ pub fn check(profile: &Profile, adc: Option<&Path>) -> Preflight {
     {
         return Preflight::Blocked(Diagnosis {
             kind: FailureKind::StaleInstance,
-            message: "This profile is missing connection names — run \"Refresh connection names\" before starting.".to_string(),
+            message: "This profile is missing connection names — open Profiles… and type them in \
+                      before starting."
+                .to_string(),
             fix_command: None,
         });
     }
@@ -274,7 +276,15 @@ mod tests {
         std::fs::write(&adc, "{}").expect("write adc");
 
         match check(&profile, Some(&adc)) {
-            Preflight::Blocked(d) => assert_eq!(d.kind, FailureKind::StaleInstance),
+            Preflight::Blocked(d) => {
+                assert_eq!(d.kind, FailureKind::StaleInstance);
+                // This is the first-run state for every new profile, so the
+                // message has to say where to type the names — and must not
+                // send the user to a lookup the app no longer performs.
+                let lower = d.message.to_lowercase();
+                assert!(lower.contains("type them in"), "message: {}", d.message);
+                assert!(!lower.contains("refresh"), "message: {}", d.message);
+            }
             other => panic!("expected Blocked(StaleInstance), got {other:?}"),
         }
     }

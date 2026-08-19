@@ -14,7 +14,6 @@
 import { tauriWindow } from './ipc.js';
 import { $, clearError } from './dom.js';
 import { loadLogs } from './logs-view.js';
-import { changesAreOpen, changesDefaultButton, hideChanges } from './changes.js';
 
 /// The sections, in sidebar order. Arrow keys walk this list.
 const SECTIONS = ['profiles', 'logs'];
@@ -33,7 +32,7 @@ export function applyView() {
   $('view-profiles').hidden = isLogs;
   $('view-logs').hidden = !isLogs;
   // The footer's actions all belong to the profile editor; the logs section has
-  // its own Refresh in its own bar.
+  // its own reload button in its own bar.
   $('footer').hidden = isLogs;
   document.body.classList.toggle('logs-view', isLogs);
 
@@ -141,11 +140,6 @@ export function wireWindowKeys(defaultAction) {
       // most local dismissable thing first -- and puts the window away only when
       // there is nothing left to dismiss, which is what a native settings sheet
       // does.
-      if (changesAreOpen()) {
-        hideChanges();
-        $('btn-refresh').focus();
-        return;
-      }
       if (!$('banner').hidden) {
         clearError();
         return;
@@ -171,9 +165,7 @@ export function wireWindowKeys(defaultAction) {
     if (active && (active.tagName === 'BUTTON' || active.tagName === 'SELECT')) {
       return;
     }
-    // The diff panel owns Return while it is open: applying is the action in
-    // front of the user, and saving underneath it would commit the wrong thing.
-    const target = changesAreOpen() ? changesDefaultButton() : defaultAction();
+    const target = defaultAction();
     if (!target) return;
     event.preventDefault();
     target.click();

@@ -72,70 +72,7 @@
   display: none;
 }
 
-.footnote {
-  margin: 6px 2px 0;
-  font-size: 11px;
-  color: var(--text-secondary);
-}
-
 .note {
   color: var(--text-secondary);
   font-size: 11px;
-}
-
-/* --- proposed changes ----------------------------------------------------- */
-
-.changes[hidden] {
-  display: none;
-}
-
-.row-change {
-  align-items: baseline;
-  padding-top: 6px;
-  padding-bottom: 6px;
-}
-
-.row-change .row-label {
-  flex: 0 0 130px;
-  font-size: 11px;
-  color: var(--text-secondary);
-  overflow-wrap: anywhere;
-}
-
-.diff {
-  flex: 1 1 auto;
-  min-width: 0;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  justify-content: flex-end;
-  gap: 6px;
-  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
-  font-size: 11px;
-  text-align: right;
-}
-
-.diff-from,
-.diff-to {
-  overflow-wrap: anywhere;
-}
-
-.diff-from {
-  color: var(--text-secondary);
-  text-decoration: line-through;
-}
-
-.diff-arrow {
-  color: var(--text-tertiary);
-}
-
-.diff-to {
-  color: var(--text);
-}
-
-.change-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  margin-top: 10px;
 }

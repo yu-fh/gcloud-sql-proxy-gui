@@ -1,2 +1,0 @@
-primary-instance	CLOUD_SQL_INSTANCE	my-project-dev:us-central1:primary-instance
-replica-instance	READ_REPLICA_INSTANCE	my-project-dev:us-central1:replica-instance

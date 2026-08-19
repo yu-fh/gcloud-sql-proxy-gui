@@ -14,11 +14,6 @@
 // imports, served same-origin.
 
 import { $, note } from './dom.js';
-import {
-  hideChanges,
-  refreshConnectionNames,
-  setAppliedListener,
-} from './changes.js';
 import { setSelectionListener } from './env-list.js';
 import { loadLogs } from './logs-view.js';
 import {
@@ -37,13 +32,11 @@ import {
 
 // --- cross-module wiring ---------------------------------------------------
 //
-// Two dependencies would be cycles if imported directly: the environment list
-// has to redraw the detail form it drives, and the refresh diff has to re-read
-// the profile list after Apply. Both are injected here instead, so every import
-// edge in the graph points one way.
+// The environment list has to redraw the detail form it drives, which would be
+// an import cycle if it reached for the view directly. It is injected here
+// instead, so every import edge in the graph points one way.
 
 setSelectionListener(renderSelectionDependents);
-setAppliedListener(loadProfiles);
 
 // --- controls --------------------------------------------------------------
 
@@ -52,16 +45,14 @@ $('btn-add').addEventListener('click', addProfile);
 $('btn-delete').addEventListener('click', deleteProfile);
 $('btn-reload').addEventListener('click', () => {
   note('save-note', '');
-  hideChanges();
   loadProfiles();
 });
-$('btn-refresh').addEventListener('click', refreshConnectionNames);
 $('btn-logs-refresh').addEventListener('click', loadLogs);
 $('log-filter').addEventListener('change', loadLogs);
 
 wireSidebar();
 // Done is the window's default action, so Return presses it when nothing more
-// local (the diff panel, a focused button) claims the keystroke.
+// local (a focused button) claims the keystroke.
 wireWindowKeys(() => $('btn-save'));
 wireContextMenu();
 

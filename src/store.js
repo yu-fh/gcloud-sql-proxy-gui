@@ -18,10 +18,6 @@ let profiles = [];
 /// an index so it survives a reload that reorders or drops profiles.
 let selectedId = null;
 
-/// Proposed connection-name changes from the last `refresh_connection_names`.
-/// Held here, unwritten, until the user clicks Apply.
-let pendingChanges = [];
-
 export function getProfiles() {
   return profiles;
 }
@@ -44,12 +40,4 @@ export function selectedProfile() {
 
 export function selectedIndex() {
   return profiles.findIndex((p) => p.id === selectedId);
-}
-
-export function getPendingChanges() {
-  return pendingChanges;
-}
-
-export function setPendingChanges(changes) {
-  pendingChanges = changes;
 }

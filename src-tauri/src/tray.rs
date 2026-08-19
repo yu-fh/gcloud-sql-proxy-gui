@@ -72,7 +72,7 @@ use fh_cloud_sql_proxy_gui::core::proxy::ProxyStatus;
 
 use crate::app_state::SharedState;
 use crate::commands;
-use crate::dialogs::{confirm, report_error, report_info};
+use crate::dialogs::{confirm, report_error};
 use crate::window::{open_settings, Section};
 
 /// How often the menu re-reads live status. See the module docs.
@@ -83,7 +83,6 @@ const POLL_INTERVAL: Duration = Duration::from_secs(1);
 const ID_STATUS: &str = "status";
 const ID_PROFILES: &str = "open-profiles";
 const ID_LOGS: &str = "open-logs";
-const ID_REFRESH: &str = "refresh";
 const ID_AUTOSTART: &str = "autostart";
 const ID_QUIT: &str = "quit";
 const PROFILE_PREFIX: &str = "profile:";
@@ -278,13 +277,6 @@ fn build_menu<R: Runtime>(
 
     let open_profiles = MenuItem::with_id(app, ID_PROFILES, "Profiles…", true, None::<&str>)?;
     let open_logs = MenuItem::with_id(app, ID_LOGS, "Logs…", true, None::<&str>)?;
-    let refresh = MenuItem::with_id(
-        app,
-        ID_REFRESH,
-        "Refresh connection names",
-        true,
-        None::<&str>,
-    )?;
     let quit = MenuItem::with_id(app, ID_QUIT, "Quit", true, Some("Cmd+Q"))?;
 
     let mut builder = MenuBuilder::new(app).item(&status_item).separator();
@@ -295,7 +287,6 @@ fn build_menu<R: Runtime>(
         .separator()
         .item(&open_profiles)
         .item(&open_logs)
-        .item(&refresh)
         .item(autostart)
         .item(&PredefinedMenuItem::separator(app)?)
         .item(&quit)
@@ -591,7 +582,6 @@ async fn handle_menu_event<R: Runtime>(
         }
         ID_PROFILES => open_settings(&app, Section::Profiles),
         ID_LOGS => open_settings(&app, Section::Logs),
-        ID_REFRESH => refresh_connection_names(&app).await,
         ID_AUTOSTART => toggle_autostart(&app, &autostart_item),
         ID_STATUS => {}
         other => {
@@ -637,9 +627,9 @@ async fn toggle_profile<R: Runtime>(app: &AppHandle<R>, state: &SharedState, pro
     }
 
     if let Err(message) = commands::start_profile(app.state(), profile_id.to_string()).await {
-        // The seeded profiles have empty connection names, so preflight
-        // blocks here with "Refresh connection names" until a refresh has
-        // run. Surfacing it as a modal is the point: a click that silently
+        // A profile whose connection names have not been typed in yet is
+        // blocked by preflight, which says so and points at the Profiles
+        // window. Surfacing it as a modal is the point: a click that silently
         // did nothing would read as a broken app.
         report_error(app, &format!("Could not start {profile_id}"), &message);
     }
@@ -678,63 +668,6 @@ async fn confirm_danger<R: Runtime>(
     )
     .await
 }
-
-/// Run a gcloud refresh and apply the proposed changes after confirmation.
-///
-/// The two-step (propose, then confirm, then write) is the core's design —
-/// `refresh_connection_names` writes nothing — so the tray honours it rather
-/// than auto-applying whatever gcloud said.
-async fn refresh_connection_names<R: Runtime>(app: &AppHandle<R>) {
-    let result = match commands::refresh_connection_names(app.state()).await {
-        Ok(result) => result,
-        Err(message) => {
-            report_error(app, "Could not refresh connection names", &message);
-            return;
-        }
-    };
-
-    if result.changes.is_empty() {
-        report_info(
-            app,
-            "Connection names",
-            "Every profile already matches what gcloud reports. Nothing to change.",
-        );
-        return;
-    }
-
-    let summary = result
-        .changes
-        .iter()
-        .map(|c| {
-            let from = if c.from.is_empty() {
-                "(empty)"
-            } else {
-                &c.from
-            };
-            format!("{} {}: {} → {}", c.profile_id, c.role, from, c.to)
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    let approved = confirm(
-        app,
-        "Refresh connection names".to_string(),
-        format!("Apply these connection names?\n\n{summary}"),
-        "Apply",
-        MessageDialogKind::Info,
-    )
-    .await;
-
-    if !approved {
-        return;
-    }
-
-    match commands::apply_changes(app.state(), result.changes).await {
-        Ok(()) => report_info(app, "Connection names", "Saved."),
-        Err(message) => report_error(app, "Could not save connection names", &message),
-    }
-}
-
 
 /// Whether the app is registered to launch at login. A failed query reads as
 /// "not enabled": showing the box unchecked when we cannot tell is the
@@ -988,14 +921,7 @@ mod tests {
     fn profile_menu_ids_are_prefixed_so_they_cannot_collide_with_fixed_ids() {
         // A profile whose id happened to be "quit" or "logs" must not hijack
         // those menu items.
-        for reserved in [
-            ID_QUIT,
-            ID_LOGS,
-            ID_PROFILES,
-            ID_REFRESH,
-            ID_AUTOSTART,
-            ID_STATUS,
-        ] {
+        for reserved in [ID_QUIT, ID_LOGS, ID_PROFILES, ID_AUTOSTART, ID_STATUS] {
             assert_ne!(format!("{PROFILE_PREFIX}{reserved}"), reserved);
         }
     }

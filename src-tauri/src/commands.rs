@@ -27,11 +27,9 @@
 
 use tauri::State;
 
-use fh_cloud_sql_proxy_gui::core::profile::{
-    InstanceRole, Profile, ProfileConfig, CURRENT_SCHEMA_VERSION,
-};
+use fh_cloud_sql_proxy_gui::core::profile::{Profile, ProfileConfig, CURRENT_SCHEMA_VERSION};
 use fh_cloud_sql_proxy_gui::core::proxy::ProxyStatus;
-use fh_cloud_sql_proxy_gui::core::{discovery, preflight, state, store};
+use fh_cloud_sql_proxy_gui::core::{preflight, state, store};
 
 use crate::app_state::SharedState;
 
@@ -63,40 +61,6 @@ pub struct StartPlanView {
     /// True when the profile is marked `danger` (production), which warrants
     /// its own confirmation regardless of `stop_first`.
     pub requires_confirmation: bool,
-}
-
-/// The proposed connection-name changes from a `gcloud` refresh. Nothing has
-/// been written when this is returned.
-#[derive(serde::Serialize)]
-pub struct RefreshResult {
-    pub changes: Vec<ChangeView>,
-}
-
-/// One proposed connection-name change, round-tripped through the UI so the
-/// user can confirm before [`apply_changes`] writes it.
-#[derive(serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ChangeView {
-    pub profile_id: String,
-    /// "primary" | "replica"
-    pub role: String,
-    pub from: String,
-    pub to: String,
-}
-
-fn role_str(role: InstanceRole) -> &'static str {
-    match role {
-        InstanceRole::Primary => "primary",
-        InstanceRole::Replica => "replica",
-    }
-}
-
-fn role_from_str(role: &str) -> Option<InstanceRole> {
-    match role {
-        "primary" => Some(InstanceRole::Primary),
-        "replica" => Some(InstanceRole::Replica),
-        _ => None,
-    }
 }
 
 /// Flatten a status into the three UI-facing fields.
@@ -305,125 +269,6 @@ fn is_port_block(check: &preflight::Preflight) -> bool {
 pub async fn stop_profile(state: State<'_, SharedState>, id: String) -> Result<(), String> {
     let mut manager = state.manager.lock().await;
     manager.stop(&id).await;
-    Ok(())
-}
-
-/// Ask `gcloud` for each project's Cloud SQL instances and return the proposed
-/// connection-name changes. **Writes nothing** — [`apply_changes`] does, once
-/// the user has confirmed.
-#[tauri::command]
-pub async fn refresh_connection_names(
-    state: State<'_, SharedState>,
-) -> Result<RefreshResult, String> {
-    // Clone the profiles out and release the lock: the gcloud calls are slow
-    // network round-trips and holding the config lock across them would block
-    // every other command for seconds.
-    let profiles: Vec<Profile> = state.config.lock().await.profiles.clone();
-
-    let mut changes = Vec::new();
-    for profile in &profiles {
-        let discovered = discover(profile).await?;
-        for change in discovery::reconcile(profile, &discovered) {
-            changes.push(ChangeView {
-                profile_id: change.profile_id,
-                role: role_str(change.role).to_string(),
-                from: change.from,
-                to: change.to,
-            });
-        }
-    }
-
-    Ok(RefreshResult { changes })
-}
-
-/// Where to find `gcloud`.
-///
-/// A `.app` launched from Finder inherits a minimal `PATH` that does not
-/// include `/opt/homebrew/bin`, so relying on the name alone works when run
-/// from a terminal and then fails for exactly the users who installed the
-/// bundle. Prefer the known install locations, and fall back to the bare name
-/// so a `PATH`-only install still works.
-fn gcloud_binary() -> std::path::PathBuf {
-    const KNOWN: [&str; 3] = [
-        "/opt/homebrew/bin/gcloud",
-        "/usr/local/bin/gcloud",
-        // The Cloud SDK's own installer, when not routed through Homebrew.
-        "/usr/local/google-cloud-sdk/bin/gcloud",
-    ];
-    KNOWN
-        .iter()
-        .map(std::path::PathBuf::from)
-        .find(|path| path.exists())
-        .unwrap_or_else(|| std::path::PathBuf::from("gcloud"))
-}
-
-/// Run `gcloud sql instances list` for one profile's project and parse it.
-async fn discover(profile: &Profile) -> Result<Vec<discovery::DiscoveredInstance>, String> {
-    let output = tokio::process::Command::new(gcloud_binary())
-        .args(discovery::gcloud_args(&profile.project))
-        .output()
-        .await
-        .map_err(|e| {
-            if e.kind() == std::io::ErrorKind::NotFound {
-                "gcloud was not found — install the Google Cloud CLI \
-                 (https://cloud.google.com/sdk/docs/install) and try again."
-                    .to_string()
-            } else {
-                format!("could not run gcloud: {e}")
-            }
-        })?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(format!(
-            "gcloud failed for project '{}': {}",
-            profile.project,
-            if stderr.is_empty() {
-                "no error output".to_string()
-            } else {
-                stderr
-            }
-        ));
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    discovery::parse_instances(&stdout).map_err(|e| format!("project '{}': {e}", profile.project))
-}
-
-/// Apply confirmed connection-name changes and persist.
-///
-/// Unrecognised `role` strings are ignored rather than erroring: the list
-/// round-trips through the frontend, and one bad entry should not block the
-/// rest. The config guard is held across apply + write + update for the same
-/// reason as [`save_profiles`].
-#[tauri::command]
-pub async fn apply_changes(
-    state: State<'_, SharedState>,
-    changes: Vec<ChangeView>,
-) -> Result<(), String> {
-    let core_changes: Vec<discovery::Change> = changes
-        .into_iter()
-        .filter_map(|c| {
-            Some(discovery::Change {
-                profile_id: c.profile_id,
-                role: role_from_str(&c.role)?,
-                from: c.from,
-                to: c.to,
-            })
-        })
-        .collect();
-
-    let mut config = state.config.lock().await;
-
-    // Apply to a copy so a validation failure cannot leave the in-memory
-    // config half-updated relative to what is on disk.
-    let mut next = config.clone();
-    for profile in &mut next.profiles {
-        discovery::apply(profile, &core_changes);
-    }
-
-    store::save(&state.config_path, &next).map_err(|e| e.to_string())?;
-    *config = next;
     Ok(())
 }
 

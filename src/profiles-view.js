@@ -1,8 +1,8 @@
 // The Profiles section: the detail form for the selected environment, and the
 // four operations that move profiles around (load, save, add, delete).
 //
-// The environment list itself lives in env-list.js and the refresh diff in
-// changes.js; this module owns the form and the backend round-trips.
+// The environment list itself lives in env-list.js; this module owns the form
+// and the backend round-trips.
 
 import { confirmDestructive, invoke } from './ipc.js';
 import { $, clear, clearError, copyText, el, note, showError } from './dom.js';
@@ -99,14 +99,21 @@ export function renderDetail() {
         'This environment has no connection names yet, so it cannot start.',
       ),
     );
+    // Finding the value is the user's job now, so the notice names the command
+    // that prints it rather than only saying a name is missing. One line of
+    // prose plus the command, as a native empty state is -- not a tutorial.
     hint.appendChild(
       el(
         'div',
         'notice-body',
-        'Choose “Refresh Connection Names” below to look them up from gcloud, ' +
-          'or type them in here.',
+        'Type each one into the fields below, in the form ' +
+          'project:region:instance. To look them up:',
       ),
     );
+    // The command gets the same copyable treatment as the ADC fix rather than
+    // being run into the prose: it contains no spaces to wrap at, so as body
+    // text it breaks mid-identifier at narrow widths and stops being copyable.
+    hint.appendChild(lookupCommandRow(profile.project));
     container.appendChild(hint);
   }
 
@@ -119,13 +126,7 @@ export function renderDetail() {
     failure.appendChild(el('div', 'notice-body', profile.detail));
     const fix = profile.fixCommand || profile.fix_command;
     if (fix) {
-      const row = el('div', 'fix-row');
-      row.appendChild(el('code', 'fix-command', fix));
-      const copy = el('button', 'small', 'Copy');
-      copy.type = 'button';
-      copy.addEventListener('click', () => copyText(fix, copy));
-      row.appendChild(copy);
-      failure.appendChild(row);
+      failure.appendChild(commandRow(fix));
     }
     container.appendChild(failure);
   }
@@ -250,6 +251,32 @@ export function renderDetail() {
     );
   }
   container.appendChild(info);
+}
+
+/// A command shown as monospace text with a Copy button. Used for both the
+/// backend's `fixCommand` and the connection-name lookup hint, so the two read
+/// as the same kind of thing: a command you are meant to run yourself.
+function commandRow(command) {
+  const row = el('div', 'fix-row');
+  row.appendChild(el('code', 'fix-command', command));
+  const copy = el('button', 'small', 'Copy');
+  copy.type = 'button';
+  copy.addEventListener('click', () => copyText(command, copy));
+  row.appendChild(copy);
+  return row;
+}
+
+/// The `gcloud` invocation that prints a project's connection names.
+///
+/// `--format` is included because the bare `list` output does not show the
+/// connection name at all, so a user who ran the short form would not find the
+/// value they were sent to look for. An unset project leaves a placeholder
+/// rather than emitting `--project=`, which would silently fail.
+function lookupCommandRow(project) {
+  return commandRow(
+    `gcloud sql instances list --project=${project || '<project>'} ` +
+      `--format='value(name,connectionName)'`,
+  );
 }
 
 export function markDirty() {

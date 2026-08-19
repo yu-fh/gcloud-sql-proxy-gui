@@ -51,27 +51,19 @@ pub async fn confirm<R: Runtime>(
 /// A modal carrying an operator-facing failure. Errors from the command layer
 /// are already user-facing text (the core renders them via `thiserror`), so
 /// they are shown verbatim rather than paraphrased.
+///
+/// Error is the only single-button kind the app has left: an informational
+/// variant existed to report the outcome of a connection-name lookup, and that
+/// feature is gone. A helper with no caller is worse than one written again if
+/// a second kind is ever needed.
 pub fn report_error<R: Runtime>(app: &AppHandle<R>, title: &str, message: &str) {
-    show_message(app, title, message, MessageDialogKind::Error);
-}
-
-pub fn report_info<R: Runtime>(app: &AppHandle<R>, title: &str, message: &str) {
-    show_message(app, title, message, MessageDialogKind::Info);
-}
-
-fn show_message<R: Runtime>(
-    app: &AppHandle<R>,
-    title: &str,
-    message: &str,
-    kind: MessageDialogKind,
-) {
     // Non-blocking: this is called from async contexts that have nothing left
     // to do but report, and blocking one of them on a click of "OK" would
     // hold a runtime thread for as long as the user ignores the dialog.
     app.dialog()
         .message(message.to_string())
         .title(title.to_string())
-        .kind(kind)
+        .kind(MessageDialogKind::Error)
         .buttons(MessageDialogButtons::Ok)
         .show(|_| {});
 }

@@ -1,4 +1,3 @@
-pub mod discovery;
 pub mod log_watcher;
 pub mod preflight;
 pub mod profile;

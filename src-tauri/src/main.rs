@@ -49,8 +49,6 @@ fn main() {
             commands::delete_profile,
             commands::start_profile,
             commands::stop_profile,
-            commands::refresh_connection_names,
-            commands::apply_changes,
             commands::read_logs,
         ])
         .setup(move |app| {

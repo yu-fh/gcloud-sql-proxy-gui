@@ -11,8 +11,8 @@
 /// Call a Rust command. Rejections are the caller's to surface -- see
 /// `showError` in dom.js; every call site routes failures to visible text.
 ///
-/// Field names on the wire are camelCase (`connectionName`, `profileId`,
-/// `autoIamAuthn`, `impersonateServiceAccount`, `fixCommand`): the Rust structs
+/// Field names on the wire are camelCase (`connectionName`, `autoIamAuthn`,
+/// `privateIp`, `impersonateServiceAccount`, `fixCommand`): the Rust structs
 /// carry serde renames and the snake_case spelling is rejected by the
 /// deserializer, silently dropping the value in the best case.
 export const invoke = window.__TAURI__.core.invoke;

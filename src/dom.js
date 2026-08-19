@@ -34,7 +34,7 @@ export function clearError() {
   banner.textContent = '';
 }
 
-/// Transient status text in the footer ("Saved.", "Refreshing…").
+/// Transient status text in the footer ("Saved.", "Unsaved changes").
 export function note(id, text) {
   $(id).textContent = text || '';
 }
@@ -48,7 +48,7 @@ const BUSY_THRESHOLD_MS = 200;
 /// Returns whatever `work` resolves to.
 ///
 /// This replaces an older unconditional placeholder row, which was a loading
-/// skeleton by another name: it appeared for a gcloud call that usually
+/// skeleton by another name: it appeared for a backend call that usually
 /// answers in well under a frame's worth of perceptible delay.
 export async function withBusyNote(id, message, work) {
   let shown = false;

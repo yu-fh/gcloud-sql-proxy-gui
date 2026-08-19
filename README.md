@@ -65,7 +65,6 @@ dev — 127.0.0.1:15432, :15433
 ──────────────────
 Profiles…
 Logs…
-Refresh connection names
 Launch at Login        ✓
 ──────────────────
 Quit
@@ -86,13 +85,19 @@ the background.
 ### First run
 
 The app seeds three environments — dev, stg, and prd — with empty connection
-names, so nothing can start until you fill them in. Open **Profiles…** and
-choose **Refresh Connection Names**: it queries `gcloud sql instances list` for
-each project, shows what it proposes to change, and writes only what you
-approve.
+names, so nothing can start until you fill them in. Open **Profiles…**, set each
+environment's project, and type its connection names into the Primary and Read
+Replica fields. A connection name looks like `project:region:instance`; to find
+them:
+
+```sh
+gcloud sql instances list --project=<project> \
+  --format='value(name,instanceType,connectionName)'
+```
 
 Do the same whenever a connection that used to work starts reporting that the
-instance does not exist. That is Terraform having replaced the instance.
+instance does not exist. That is Terraform having replaced the instance, which
+regenerates the trailing `terraform-<timestamp>` segment of its connection name.
 
 ### Environments are yours to define
 
@@ -142,7 +147,7 @@ The app names the cause rather than showing you a log:
 | Credentials expired | Run `gcloud auth application-default login`. The app offers the command to copy. |
 | Off VPN | Cloud SQL is private-IP only. Connect to the VPN. |
 | Port in use | Another environment or a stray proxy holds it. Stop it, or change this environment's ports. |
-| Instance not found | Terraform replaced it. Run **Refresh Connection Names**. |
+| Instance not found | Terraform replaced it. Look the new connection name up and type it into **Profiles…**. |
 
 **Logs…** shows the proxy's raw output if you need more than that.
 
@@ -173,7 +178,6 @@ standalone:
 | `log_watcher` | Turns proxy output into a diagnosis with a fix |
 | `preflight` | Port, credential, and connection-name checks before spawn |
 | `proxy` | Owns the child processes; kills them on exit |
-| `discovery` | Reads `gcloud sql instances list`, reconciles drift |
 | `state` | Decides what must stop before a profile can start |
 
 The Tauri layer above it is deliberately thin, and split by responsibility:

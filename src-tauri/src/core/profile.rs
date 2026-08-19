@@ -169,9 +169,10 @@ pub enum ValidationError {
     #[error("profile '{0}' has no instances")]
     NoInstances(String),
 
-    /// The same role appears twice within a single profile. Instances are
-    /// matched by role when reconciling connection names against gcloud, so
-    /// two instances sharing a role would make that reconciliation ambiguous.
+    /// The same role appears twice within a single profile. Role is how an
+    /// instance is named everywhere else — the detail form's field labels, the
+    /// log lines, the port table — so two instances sharing one would leave
+    /// the user unable to tell which row is which.
     #[error("profile '{profile}' has more than one {role:?} instance")]
     DuplicateRole {
         profile: String,
@@ -381,8 +382,8 @@ mod tests {
 
     #[test]
     fn validate_rejects_two_instances_sharing_a_role() {
-        // Reconciliation against gcloud matches instances by role, so two
-        // primaries would make it ambiguous which one to update.
+        // Role is how an instance is identified in the UI, so two primaries
+        // would leave the user unable to tell the two rows apart.
         let mut dev = standard_profile("dev");
         dev.instances = vec![
             primary("proj:us-central1:a", 15432),

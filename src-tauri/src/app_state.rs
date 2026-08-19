@@ -25,7 +25,7 @@ use fh_cloud_sql_proxy_gui::core::proxy::ProxyManager;
 /// obeys.
 ///
 /// Concretely, the permitted shapes are:
-/// - take `config` alone (e.g. `save_profiles`, `apply_changes`),
+/// - take `config` alone (e.g. `save_profiles`, `add_profile`),
 /// - take `manager` alone (e.g. `stop_profile`, `read_logs`),
 /// - take `config`, then `manager` while still holding `config`
 ///   (e.g. `list_profiles`, `start_profile`).

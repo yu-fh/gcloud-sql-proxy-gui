@@ -212,7 +212,7 @@ button {
  * This is the checklist's precise rule and the one web styling always gets
  * wrong: AppKit's rounded-bezel NSButton does not light up under the pointer.
  * It has exactly two states a mouse can produce -- at rest and pressed. Adding
- * a hover background to Revert/Refresh/Done makes them read as web buttons no
+ * a hover background to Revert/Done makes them read as web buttons no
  * matter how correct their metrics are. Borderless icon buttons *do* tint on
  * hover (see .gutter-button below), which is why the treatment cannot be
  * uniform: native varies it by control kind. */

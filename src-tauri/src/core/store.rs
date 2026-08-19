@@ -43,8 +43,8 @@ pub const DEFAULT_PRIMARY_PORT: u16 = 15432;
 pub const DEFAULT_REPLICA_PORT: u16 = 15433;
 
 /// Build a standard-shaped profile: one primary on 15432, one replica on
-/// 15433, both with an empty connection name (filled in later by gcloud
-/// discovery), default proxy flags, and no impersonation.
+/// 15433, both with an empty connection name (the user types those in),
+/// default proxy flags, and no impersonation.
 ///
 /// `vpn_probe_host` is the optional diagnostic host — see [`Profile`].
 fn standard_profile(
@@ -90,8 +90,8 @@ pub fn new_profile(name: &str, taken_ids: &[String]) -> Profile {
 }
 
 /// The first-run seed: dev, stg, prd, each with a primary (15432) and replica
-/// (15433) instance and an empty connection name -- gcloud discovery fills
-/// those in.
+/// (15433) instance and an empty connection name -- the user fills those in
+/// from the Profiles window.
 ///
 /// This is a convenience, not a fixed set: the user can rename, delete, or add
 /// to these freely. Nothing in the app keys off these particular names.

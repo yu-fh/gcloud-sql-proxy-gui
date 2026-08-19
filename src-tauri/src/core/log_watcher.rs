@@ -83,7 +83,9 @@ pub fn classify(line: &str) -> ProxyEvent {
     if lower.contains("does not exist") {
         return ProxyEvent::Failure(Diagnosis {
             kind: FailureKind::StaleInstance,
-            message: "This instance connection name is stale — use \"Refresh connection names\" in the app to fetch the current one.".to_string(),
+            message: "Cloud SQL says this instance no longer exists — it was probably replaced, \
+                      so open Profiles… and update its connection name."
+                .to_string(),
             fix_command: None,
         });
     }
@@ -286,13 +288,15 @@ mod tests {
         match classify(line) {
             ProxyEvent::Failure(d) => {
                 assert_eq!(d.kind, FailureKind::StaleInstance);
+                // The message must point at hand-editing the name, not at any
+                // lookup the app performs on the user's behalf.
+                let lower = d.message.to_lowercase();
                 assert!(
-                    d.message
-                        .to_lowercase()
-                        .contains("refresh connection names"),
+                    lower.contains("no longer exists") && lower.contains("connection name"),
                     "message: {}",
                     d.message
                 );
+                assert!(!lower.contains("refresh"), "message: {}", d.message);
             }
             other => panic!("expected Failure(StaleInstance), got {other:?}"),
         }
