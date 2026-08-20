@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Draw the design sheet's mark: the app icon master and all eight tray assets.
+"""Draw all eight menu bar tray assets: four states x two appearances.
 
 The mark is an **isometric stack of three slabs** — each layer a rhombus top face
 plus its two visible side faces, reading as one solid 3D block, with a status dot
@@ -13,16 +13,21 @@ must not be redrawn here, and derived every shipped asset by recolouring the
 delivered PNGs. **That is no longer true, and the reason is that the delivery does
 not match the sheet.**
 
-`design/tray-source/*.svg` draws three rounded rectangles under `rotate(-30)` —
-flat tilted cards. The sheet draws an isometric stack of extruded slabs. Those are
+The delivered SVGs drew three rounded rectangles under `rotate(-30)` — flat
+tilted cards. The sheet draws an isometric stack of extruded slabs. Those are
 different marks, not two renderings of one mark: a tilted rectangle has no side
 faces and no thickness, so no amount of recolouring turns it into the block on the
 sheet. Recolouring can move a pixel's colour; it cannot add a face that was never
 drawn. So the geometry is constructed here, from the sheet.
 
-The delivery is **kept** in `design/tray-source/` as the reference record of what
-the designer sent, and `tray-source/README.md` documents the state semantics
-(which this file follows exactly). It is no longer the source of any shipped byte.
+# The app icon is not built here
+
+`src-tauri/icons/icon-source.png` is a finished 1024px master, committed as-is,
+and `tauri icon` derives every other size from it. An earlier version of this
+script composed that master by cropping a 3D render out of `design/app-source/`,
+which meant every run of this script — even one that only touched tray geometry —
+silently overwrote the committed icon. Both the render and that code path are
+gone: a finished master needs no pipeline.
 
 # The geometry
 
@@ -79,13 +84,12 @@ internal separation across the two appearances.
 # Rasterising
 
 No SVG rasteriser is installed on this machine: `rsvg-convert`, `cairosvg` and
-`inkscape` are all absent. `qlmanage` ships with every macOS and is used for the
-app icon, whose tile is opaque anyway — but it **flattens transparency onto opaque
-white**, which is fatal for a tray icon (every pixel comes back at alpha 255, and
-a menu bar icon is mostly transparent). So the tray assets are drawn with Pillow
-directly, which needs no SVG round-trip at all: this geometry is nothing but
-filled polygons and two circles, which is precisely what `ImageDraw` does, and it
-gives exact alpha. They are drawn at `TRAY_SUPERSAMPLE`x and box-filtered down,
+`inkscape` are all absent. The one rasteriser macOS does ship, `qlmanage`,
+**flattens transparency onto opaque white**, which is fatal here — every pixel
+comes back at alpha 255, and a menu bar icon is mostly transparent. So the assets
+are drawn with Pillow directly, which needs no SVG round-trip at all: this
+geometry is nothing but filled polygons and two circles, which is precisely what
+`ImageDraw` does, and it gives exact alpha. They are drawn at `TRAY_SUPERSAMPLE`x and box-filtered down,
 because `ImageDraw.polygon` does not antialias.
 
 The eight assets land in `src-tauri/icons/tray-{state}[-light].png` and are
@@ -95,11 +99,7 @@ output is a pure function of the constants in this file, so a re-run with nothin
 changed rewrites every file byte-for-byte identically.
 """
 import hashlib
-import subprocess
 from pathlib import Path
-
-OUT = Path(__file__).parent / "final"
-OUT.mkdir(exist_ok=True)
 
 
 # --- the isometric stack, in the abstract ----------------------------------
@@ -212,167 +212,6 @@ def dark_level_for(level: int) -> int:
     return round((lo + hi) / 2)
 
 
-# --- the app icon ----------------------------------------------------------
-#
-# Unlike the tray marks, the app icon is NOT drawn here. It is cropped out of a
-# 3D render the designer produced: a frosted-glass tile with three translucent
-# glass slabs stacked on it, with real refraction, specular edges and a brushed
-# radial texture.
-#
-# That is deliberate, and it is a limitation worth stating rather than papering
-# over: those materials are not reproducible with the flat polygon fills this
-# script uses for the tray. An SVG approximation would be a flat pastiche of a
-# glass icon, which is worse than using the render.
-#
-# The render arrives as a JPEG with a *painted* checkerboard standing in for
-# transparency — it has no alpha channel at all. So the work here is to find the
-# tile's true edges inside that checkerboard, crop to them, and apply a rounded
-# rectangle alpha mask so Finder gets a proper icon shape rather than a square
-# with checkered corners.
-#
-# Edge detection uses the checkerboard's periodicity rather than its brightness.
-# The checker squares are ~43px and only about 30 levels apart, so a brightness
-# threshold catches the tile's own gradient too; but the checker is the only
-# region where pixels a half-period apart differ while pixels a full period
-# apart match. Three scanlines vote, so a single line crossing a specular
-# highlight cannot skew the result.
-APP_RENDER = Path(__file__).parent / "app-source" / "render.jpeg"
-
-# The tile's corner radius as a fraction of its side. The render has its own
-# rounding baked in; this matches it so the mask lands on the existing curve
-# rather than cutting a second one inside it.
-APP_CORNER = 0.225
-
-# Inset applied to the detected bounds. The detector lands within a pixel or two
-# of the edge, and a sliver of checkerboard left in the corners is glaring once
-# the icon sits on a coloured Finder background.
-APP_INSET = 3
-
-# Supersampling for the corner mask. `ImageDraw.rounded_rectangle` does not
-# antialias, so the mask is drawn large and box-filtered down.
-APP_MASK_SUPERSAMPLE = 4
-
-# The glass stack is not centred within the tile in the render itself: measured
-# on the darkest quartile of the cropped master, its centroid sat at (552, 657)
-# against a canvas centre of (512, 512) — 40px right and 145px low. Cropping to
-# the tile therefore inherits that offset, and the icon reads as sitting low.
-#
-# So the crop window is shifted by the measured error, which moves the stack to
-# the centre at the cost of an asymmetric tile margin. That is the right trade:
-# at Finder sizes the eye registers where the mark sits, not whether the margin
-# around it is even.
-#
-# These are measured constants, not tuning knobs. Re-measure if the render is
-# replaced: threshold the master's alpha>200 pixels, take those below the 25th
-# luminance percentile (the glass, which is darker than the brushed tile), and
-# compare their centroid to the canvas centre.
-APP_STACK_DX = 40
-APP_STACK_DY = 145
-
-
-def _checker_period(image, probe_y: int = 20, span: int = 600) -> int:
-    """Measure the painted checkerboard's square size, in pixels."""
-    px = image.load()
-    values = [(x, sum(px[x, probe_y]) // 3) for x in range(span)]
-    threshold = (max(v for _, v in values) + min(v for _, v in values)) // 2
-    edges = [
-        x for i, (x, v) in enumerate(values[1:], 1)
-        if (v > threshold) != (values[i - 1][1] > threshold)
-    ]
-    if len(edges) < 2:
-        raise SystemExit(f"{APP_RENDER.name}: could not measure the checkerboard")
-    return edges[1] - edges[0]
-
-
-def _tile_bounds(image, period: int) -> tuple:
-    """Find the tile's edges inside the painted checkerboard.
-
-    Returns `(left, top, right, bottom)`. See the section comment on why this
-    keys on periodicity rather than brightness.
-    """
-    width, height = image.size
-    px = image.load()
-
-    def level(x: int, y: int) -> int:
-        return sum(px[max(0, min(width - 1, x)), max(0, min(height - 1, y))]) // 3
-
-    def is_checker(position: int, fixed: int, horizontal: bool) -> bool:
-        samples = [
-            level(position + k, fixed) if horizontal else level(fixed, position + k)
-            for k in range(0, period * 2, 4)
-        ]
-        return (max(samples) - min(samples)) > 25
-
-    def scan(fixed: int, horizontal: bool, forward: bool):
-        limit = (width if horizontal else height) - period
-        steps = range(0, limit, 2) if forward else range(limit - 1, 0, -2)
-        for position in steps:
-            if not is_checker(position, fixed, horizontal):
-                return position
-        return None
-
-    def consensus(fixed_values, horizontal: bool, forward: bool) -> int:
-        found = [scan(f, horizontal, forward) for f in fixed_values]
-        found = [f for f in found if f is not None]
-        if not found:
-            raise SystemExit(f"{APP_RENDER.name}: could not find the tile edge")
-        return sorted(found)[len(found) // 2]
-
-    rows = [int(height * f) for f in (0.45, 0.50, 0.55)]
-    cols = [int(width * f) for f in (0.45, 0.50, 0.55)]
-    return (
-        consensus(rows, True, True),
-        consensus(cols, False, True),
-        consensus(rows, True, False),
-        consensus(cols, False, False),
-    )
-
-
-def build_app_icon(size: int = 1024) -> Path:
-    """Crop the render to the tile, round its corners, write the master."""
-    from PIL import Image, ImageDraw
-
-    render = Image.open(APP_RENDER).convert("RGB")
-    period = _checker_period(render)
-    left, top, right, bottom = _tile_bounds(render, period)
-
-    left, top = left + APP_INSET, top + APP_INSET
-    right, bottom = right - APP_INSET, bottom - APP_INSET
-
-    # Square up on the shorter side: the tile is square, and forcing the aspect
-    # ratio rather than stretching keeps the brushed texture circular.
-    side = min(right - left, bottom - top)
-    cx, cy = (left + right) // 2, (top + bottom) // 2
-
-    # Shift the window so the *stack* lands centred rather than the tile — see
-    # APP_STACK_DX/DY. The measured offsets are in master-scale pixels, so they
-    # scale back into render pixels by the same ratio the crop will scale down.
-    render_per_master = side / size
-    cx += round(APP_STACK_DX * render_per_master)
-    cy += round(APP_STACK_DY * render_per_master)
-
-    tile = render.crop(
-        (cx - side // 2, cy - side // 2, cx + side // 2, cy + side // 2)
-    ).resize((size, size), Image.LANCZOS)
-
-    radius = int(size * APP_CORNER)
-    scale = APP_MASK_SUPERSAMPLE
-    mask = Image.new("L", (size * scale, size * scale), 0)
-    ImageDraw.Draw(mask).rounded_rectangle(
-        [0, 0, size * scale - 1, size * scale - 1], radius=radius * scale, fill=255
-    )
-    mask = mask.resize((size, size), Image.LANCZOS)
-
-    icon = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    icon.paste(tile, (0, 0), mask)
-
-    out = OUT / "app-icon.png"
-    icon.save(out)
-    icon.save(Path(__file__).parent.parent / "src-tauri" / "icons" / "icon-source.png")
-    return out
-
-
-TRAY_SRC = Path(__file__).parent / "tray-source"
 TRAY_OUT = Path(__file__).parent.parent / "src-tauri" / "icons"
 
 # The states the app actually renders. `paused` is in the designer's delivery and
@@ -617,13 +456,8 @@ def build_tray() -> list:
 
 
 if __name__ == "__main__":
-    # App icon master. `tauri icon` derives every other size from it.
-    master = build_app_icon()
-    print("app icon:", master.name)
-
-    # Tray: both appearances of all four wired states, drawn from the sheet's
-    # geometry. See the module docstring on why these are drawn here rather than
-    # recoloured from `design/tray-source/`.
+    # Both appearances of all four wired states. The app icon is NOT built here
+    # -- see the module docstring.
     tray = build_tray()
     print(f"tray icons ({TRAY_SIZE}px, all distinct):",
           sorted(p.name for p in tray))
