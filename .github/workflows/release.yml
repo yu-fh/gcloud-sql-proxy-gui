@@ -1,0 +1,82 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build and release, e.g. v0.1.0"
+        required: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release:
+    name: Build and publish macOS DMG
+    runs-on: macos-14
+    permissions:
+      # tauri-action creates the release and uploads the DMG to it.
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          # Both halves of the universal binary. `universal-apple-darwin` is not
+          # itself a rustc target -- Tauri builds each arch and runs `lipo`, so
+          # both have to be installed.
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Cache cargo registry and build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Build and publish
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # NOTE: this build is **not** signed with a Developer ID, so macOS
+          # quarantines the DMG on download and refuses to open the app with
+          # "the developer cannot be verified". The README documents the
+          # `xattr -dr com.apple.quarantine` workaround for downloaders.
+          #
+          # To sign properly, add these repository secrets and they take effect
+          # with no change to this file -- tauri-action reads them from the
+          # environment:
+          #
+          #   APPLE_CERTIFICATE           base64 of the .p12 Developer ID cert
+          #   APPLE_CERTIFICATE_PASSWORD  its export password
+          #   APPLE_SIGNING_IDENTITY      e.g. "Developer ID Application: … (TEAMID)"
+          #   APPLE_ID / APPLE_PASSWORD   Apple ID and an app-specific password
+          #   APPLE_TEAM_ID               the team id, for notarisation
+          #
+          # Signing requires a paid Apple Developer account.
+        with:
+          tagName: ${{ github.event.inputs.tag || github.ref_name }}
+          releaseName: ${{ github.event.inputs.tag || github.ref_name }}
+          releaseBody: |
+            macOS universal build (Apple Silicon and Intel).
+
+            **This build is not signed**, so macOS will refuse to open it on
+            first launch. To clear the quarantine flag after moving the app to
+            `/Applications`:
+
+            ```sh
+            xattr -dr com.apple.quarantine "/Applications/Cloud SQL Proxy.app"
+            ```
+
+            See the README for what the app expects to find on your machine.
+          releaseDraft: false
+          prerelease: false
+          # One DMG that runs on both architectures. The alternative is two
+          # per-arch downloads and a downloader who has to know which they need.
+          args: --target universal-apple-darwin

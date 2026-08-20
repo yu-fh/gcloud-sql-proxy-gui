@@ -1,0 +1,88 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  # One run per branch. A new push cancels the previous run rather than queueing
+  # behind it -- only the tip matters, and a Tauri build is not cheap.
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # Backtraces cost nothing here and turn a bare "panicked at" in the log into
+  # something actionable without a re-run.
+  RUST_BACKTRACE: 1
+
+jobs:
+  test:
+    name: Test and lint
+    # macOS because the app links against AppKit and WebKit -- it does not
+    # compile anywhere else, so there is no cheaper runner to fall back to.
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo registry and build
+        uses: Swatinem/rust-cache@v2
+        with:
+          # The crate lives in src-tauri/, so the lockfile the cache key is
+          # derived from is not at the repo root.
+          workspaces: src-tauri
+
+      - name: Check formatting
+        working-directory: src-tauri
+        run: cargo fmt --check
+
+      - name: Clippy
+        working-directory: src-tauri
+        # Warnings fail the build. This is a small codebase with no existing
+        # clippy debt, so the alternative is that the first warning is ignored
+        # and every one after it is invisible.
+        run: cargo clippy --no-default-features --all-targets -- -D warnings
+
+      - name: Test
+        working-directory: src-tauri
+        # --no-default-features matches how the tests are run locally: the
+        # default feature set pulls in the Tauri runtime, which wants a window
+        # server the runner does not have.
+        run: cargo test --no-default-features
+
+  build:
+    name: Build app bundle
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry and build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install npm dependencies
+        # Only the Tauri CLI. There is no frontend build step -- `frontendDist`
+        # points straight at `src/`, which is plain static files.
+        run: npm ci
+
+      - name: Build
+        run: npx tauri build
+
+      - name: Upload app bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-app
+          path: src-tauri/target/release/bundle/dmg/*.dmg
+          if-no-files-found: error
+          retention-days: 30

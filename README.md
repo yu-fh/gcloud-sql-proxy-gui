@@ -41,6 +41,34 @@ to run.
 - Network reach to the instances — if they are private-IP only, that usually
   means a VPN, and nothing connects without it
 
+## Install
+
+Download the DMG from [Releases](../../releases) — one universal build, Apple
+Silicon and Intel — and drag the app to `/Applications`.
+
+**Then clear the quarantine flag**, or macOS will refuse to open it:
+
+```sh
+xattr -dr com.apple.quarantine "/Applications/Cloud SQL Proxy.app"
+```
+
+This is needed because the build is not signed with an Apple Developer ID.
+macOS flags anything downloaded from the internet, and Gatekeeper rejects a
+quarantined app with no Developer ID signature — `spctl` reports it as
+`no usable signature`. The dialog you get says the app cannot be opened, and
+depending on the macOS version it may claim the app is *damaged*, which is
+misleading: nothing is damaged, and the same bundle built locally runs fine.
+
+The command removes the quarantine flag from this one app. It does not disable
+Gatekeeper and changes no system setting.
+
+Right-click → Open reaches the same place on some macOS versions, but recent
+ones no longer reliably offer that path for an unsigned app, so the `xattr`
+command is the one that always works.
+
+If you would rather not run a command you have been handed, build from source
+instead — a locally built app is never quarantined.
+
 ## Build
 
 ```bash
@@ -48,11 +76,9 @@ npm install
 npx tauri build
 ```
 
-The app bundle lands in `src-tauri/target/release/bundle/macos/`. For
-development, `npx tauri dev` runs it with hot reload.
-
-There is no signed release and no Apple Developer account behind this, so
-distribution is source-only for now.
+The app bundle lands in `src-tauri/target/release/bundle/macos/`, and the DMG
+beside it in `bundle/dmg/`. For development, `npx tauri dev` runs it with hot
+reload.
 
 ## Using it
 
