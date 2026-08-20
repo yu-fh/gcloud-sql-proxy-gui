@@ -72,10 +72,11 @@ information to act on — it would collapse all three slabs to a single ink leve
 and destroy exactly the recession that makes the stack read as a stack.
 
 What carries over from the recolour work is the *criterion*, which was the useful
-part: hold perceived contrast against the menu bar constant. `solve-tray-ink.py`
-established it and `DARK_INK` (pure black, counter-intuitively the right choice —
-see that script) came out of it. Here it is applied per face tint at draw time by
-`dark_level_for`: for each grey level the white ink would use against the dark
+part: hold perceived contrast against the menu bar constant. That criterion, and
+`DARK_INK` coming out as pure black, were established by a scratch script that
+solved it for the delivery's discrete opacities; that script is gone with the
+delivery, but its two results are recorded here. The criterion is applied per
+face tint at draw time by `dark_level_for`: for each grey level the white ink would use against the dark
 bar, solve for the level the dark ink needs against the light bar to reach the
 same WCAG ratio. The three top faces come out at 78/52/26 against 26 apart,
 evenly separated and monotonic, so the stack keeps both its overall weight and its
@@ -157,9 +158,13 @@ def white_level(alpha: float) -> int:
 # macOS's two menu bar backgrounds, and the ink used against each. The dark ink is
 # pure black, which is counter-intuitive — the naive expectation is that
 # dark-on-light reads heavier and so wants softening — but alpha compositing is
-# not symmetric about the midpoint and the arithmetic says the opposite. See
-# `solve-tray-ink.py` for the working; that script remains the human-checkable
-# form of this calculation.
+# not symmetric about the midpoint and the arithmetic says the opposite:
+# `dark_level_for` below is the working, and bisecting for it rather than
+# assuming a closed form is what surfaced this.
+#
+# The check, if this is ever doubted: pick any grey the white ink uses against
+# DARK_BG, run `dark_level_for` on it, and confirm `_contrast` of each against
+# its own background agrees. A softened dark ink makes those ratios diverge.
 DARK_BG = (0x1C, 0x1C, 0x1E)
 LIGHT_BG = (0xF2, 0xF2, 0xF7)
 DARK_INK = (0x00, 0x00, 0x00)
