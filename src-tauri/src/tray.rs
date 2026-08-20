@@ -59,10 +59,9 @@
 //! The fix is a second set: the same geometry recoloured to dark ink, selected
 //! at runtime. Icon selection therefore has two independent dimensions —
 //! [`IconState`] (which glyph) and [`Appearance`] (which ink) — and eight
-//! embedded assets. Both sets come from `design/generate-icons.py`; the red
-//! error dot is exempt from the recolour and is byte-identical in both, because
-//! red reads on either background and is the one state whose colour carries
-//! meaning.
+//! embedded assets. The red error dot is exempt from the recolour and is
+//! byte-identical in both sets, because red reads on either background and is
+//! the one state whose colour carries meaning.
 //!
 //! The appearance is read from `NSApp.effectiveAppearance` rather than from
 //! Tauri, and it is *polled* rather than observed. Both are forced: Tauri 2.11
@@ -527,10 +526,12 @@ fn appearance<R: Runtime>(_app: &AppHandle<R>, _fallback: Appearance) -> Appeara
 /// `icon_as_template(false)` is load-bearing for this artwork, and why that in
 /// turn is what forces two sets rather than one.
 ///
-/// Eight assets: four states times two menu bar appearances. Both sets are
-/// drawn from scratch by `design/generate-icons.py` — every shipped byte is a
-/// pure function of the constants in that script, so a re-run with nothing
-/// changed rewrites all eight identically. Do not hand-edit the PNGs.
+/// Eight assets: four states times two menu bar appearances. They were drawn
+/// as flat vector geometry — an isometric stack of three slabs plus a status
+/// dot — and rasterised to 36px; the PNGs in `icons/` are the source of record.
+/// The two sets share identical geometry and differ only in ink, so a change to
+/// one that is not mirrored in the other will show as the mark shifting when the
+/// menu bar appearance changes.
 ///
 /// **These are the 36px `@2x` assets** — unlike the 18px set that used to be
 /// here, this is the size that actually renders sharply.
@@ -590,9 +591,11 @@ const TRAY_ICON_CONNECTING: &[u8] = include_bytes!("../icons/tray-connecting.png
 const TRAY_ICON_CONNECTED: &[u8] = include_bytes!("../icons/tray-connected.png");
 const TRAY_ICON_ERROR: &[u8] = include_bytes!("../icons/tray-error.png");
 
-/// The light-menu-bar set: the same artwork recoloured to dark ink by
-/// `design/generate-icons.py`. Same geometry, same red error dot — only the ink
-/// and its alpha differ. See that script for how the ink was chosen.
+/// The light-menu-bar set: the same artwork in dark ink. Same geometry, same red
+/// error dot — only the ink differs. The ink levels were chosen to hold WCAG
+/// contrast against the light menu bar equal to what the white set achieves
+/// against the dark one, which is what keeps the stack reading with the same
+/// weight and the same internal separation in both appearances.
 const TRAY_ICON_DISCONNECTED_LIGHT: &[u8] = include_bytes!("../icons/tray-disconnected-light.png");
 const TRAY_ICON_CONNECTING_LIGHT: &[u8] = include_bytes!("../icons/tray-connecting-light.png");
 const TRAY_ICON_CONNECTED_LIGHT: &[u8] = include_bytes!("../icons/tray-connected-light.png");
@@ -1417,8 +1420,7 @@ mod tests {
     ///
     /// Kept as an exact number rather than a lower bound because that is what
     /// would have caught the 18px regression: an asset silently at 1x is not a
-    /// decode failure and not visible in a diff, it is just soft. `TRAY_SIZE` in
-    /// `design/generate-icons.py` is the same number on the generating side.
+    /// decode failure and not visible in a diff, it is just soft.
     const TRAY_ICON_PX: u32 = 36;
 
     /// Every (state, appearance) pair the tray can ask for.
