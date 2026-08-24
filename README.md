@@ -29,7 +29,8 @@ Three things make that worse than it looks:
 
 This app keeps the connection names fresh, switches environments in one click,
 and — when a connection fails — tells you which of those three it was and what
-to run.
+to run. You do not have to retype the command to get started: paste it, and the
+app reads the instances, ports and flags out of it.
 
 ## Requirements
 
@@ -116,9 +117,28 @@ the background.
 
 The app starts with no environments — it has no way to guess which projects are
 yours, and a pre-filled environment would invite a connection you never chose.
-Open **Profiles…**, add one per environment you use, then set its project and
-type its connection names into the Primary and Read Replica fields. A connection
-name looks like `project:region:instance`; to find them:
+
+**If you already run `cloud-sql-proxy` by hand, paste that command.** Open
+**Profiles…**, click **Import…**, and paste the invocation you already use:
+
+```bash
+cloud-sql-proxy --auto-iam-authn --private-ip \
+  "my-project-dev:us-central1:primary-instance?port=15432" \
+  "my-project-dev:us-central1:replica-instance?port=15433"
+```
+
+The project, both connection names, both ports and the flags are read from it.
+The only thing left to type is the environment's name, and the field is already
+focused when the import lands.
+
+Flags this app has no setting for — `--address`, `--credentials-file`,
+`--unix-socket` and the like — are listed after the import rather than dropped
+in silence, because the profile then does not do everything your command did.
+Values are shown for ordinary flags and withheld for credential ones.
+
+To set an environment up by hand instead, add one with **+**, then set its
+project and type its connection names into the Primary and Read Replica fields.
+A connection name looks like `project:region:instance`; to find them:
 
 ```sh
 gcloud sql instances list --project=<project> \
@@ -242,6 +262,7 @@ standalone:
 | --- | --- |
 | `audit` | The append-only trail: in-memory view plus a rotating file |
 | `profile` | Profile types, validation, port and role uniqueness |
+| `import` | Parses a pasted `cloud-sql-proxy` command back into a profile |
 | `store` | `profiles.json` load and save, atomic writes |
 | `log_watcher` | Turns proxy output into a diagnosis with a fix |
 | `preflight` | Port, credential, and connection-name checks before spawn |

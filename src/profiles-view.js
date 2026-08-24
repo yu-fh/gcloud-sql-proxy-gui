@@ -27,6 +27,25 @@ const NAME_FIELD_ID = 'field-name';
 /// anyway, which is why the field is focused and selected on create.
 const NEW_PROFILE_NAME = 'New Environment';
 
+/// The paste box's id, so the import flow can focus it after the render that
+/// creates it — the same trick NAME_FIELD_ID uses.
+const PASTE_FIELD_ID = 'field-paste';
+
+/// Whether the import panel is open, replacing the detail pane.
+///
+/// Module state rather than a DOM query because `renderDetail()` rebuilds the
+/// pane from scratch on every selection change and every reload; the panel has
+/// to survive those, and asking the DOM whether it is open would be asking the
+/// thing that was just cleared.
+let importing = false;
+
+/// Flags the last import dropped, shown until the panel is opened again.
+///
+/// Kept out of the profile itself deliberately: it describes one import event,
+/// not the environment. Persisting it would mean showing "this was imported
+/// without --address" forever, long after the user had dealt with it.
+let lastIgnoredFlags = [];
+
 export async function loadProfiles() {
   try {
     // ProfileView is the Profile flattened together with status/detail/
@@ -76,6 +95,15 @@ export function renderDetail() {
   const profile = selectedProfile();
   const index = selectedIndex();
 
+  // The import panel takes over the pane: it is a different task from editing
+  // the selected environment, and showing both would invite typing into fields
+  // that are about to be replaced by the import.
+  if (importing) {
+    $('detail-label').textContent = 'Import';
+    container.appendChild(importPanel());
+    return;
+  }
+
   if (!profile) {
     $('detail-label').textContent = 'Settings';
     const group = el('div', 'group');
@@ -86,10 +114,37 @@ export function renderDetail() {
 
   $('detail-label').textContent = `${profile.name || profile.id} Settings`;
 
+  // --- what the last import could not carry across -----------------------
+  // Shown once, on the profile that was just imported. The command it came
+  // from is not equivalent to this profile, and only the user can judge
+  // whether the difference matters -- so the flags are named rather than
+  // summarised as a count.
+  if (lastIgnoredFlags.length > 0) {
+    const dropped = el('div', 'notice');
+    dropped.appendChild(
+      el(
+        'div',
+        'notice-title',
+        'Imported, but some flags were not carried across.',
+      ),
+    );
+    dropped.appendChild(
+      el(
+        'div',
+        'notice-body',
+        'This app has no setting for these, so the profile below does not ' +
+          'do what they did:',
+      ),
+    );
+    for (const flag of lastIgnoredFlags) {
+      dropped.appendChild(el('code', 'fix-command', flag));
+    }
+    container.appendChild(dropped);
+  }
+
   // --- next-step hint ----------------------------------------------------
-  // Both the seeded environments and any newly added one start with empty
-  // connection names, so they cannot start yet. Say so as a next step, not as
-  // an error.
+  // A newly added environment starts with empty connection names, so it
+  // cannot start yet. Say so as a next step, not as an error.
   if (profile.instances.some((i) => !i.connectionName)) {
     const hint = el('div', 'notice');
     hint.appendChild(
@@ -361,6 +416,119 @@ export async function addProfile() {
   }
 }
 
+// --- import ----------------------------------------------------------------
+
+/// The paste panel: one textarea, an explanation, and two buttons.
+///
+/// Inline in the detail pane rather than a modal, following the existing
+/// decision that a div with a backdrop is the most web-app-looking thing this
+/// window could do — see `deleteProfile`, which reaches for a real NSAlert.
+function importPanel() {
+  const group = el('div', 'group');
+
+  const intro = el('div', 'notice');
+  intro.appendChild(
+    el('div', 'notice-title', 'Paste a cloud-sql-proxy command.'),
+  );
+  intro.appendChild(
+    el(
+      'div',
+      'notice-body',
+      'The instances, ports and flags are read from the command; you supply ' +
+        'the name. Anything this app cannot represent is listed after the ' +
+        'import rather than silently dropped.',
+    ),
+  );
+  group.appendChild(intro);
+
+  const box = document.createElement('textarea');
+  box.id = PASTE_FIELD_ID;
+  box.className = 'paste-box';
+  box.spellcheck = false;
+  // Same reasoning as the identifier fields in rows.js: every character here is
+  // part of a connection name, so autocorrect can only corrupt it.
+  box.setAttribute('autocomplete', 'off');
+  box.setAttribute('autocorrect', 'off');
+  box.setAttribute('autocapitalize', 'off');
+  box.placeholder =
+    'cloud-sql-proxy --auto-iam-authn --private-ip \\\n' +
+    '  "my-project:us-central1:my-instance?port=15432"';
+  group.appendChild(box);
+
+  const actions = el('div', 'paste-actions');
+
+  const cancel = el('button', 'small', 'Cancel');
+  cancel.type = 'button';
+  cancel.addEventListener('click', () => {
+    importing = false;
+    renderDetail();
+    renderListControls();
+  });
+  actions.appendChild(cancel);
+
+  const confirm = el('button', 'small', 'Import');
+  confirm.type = 'button';
+  confirm.addEventListener('click', importProfile);
+  actions.appendChild(confirm);
+
+  group.appendChild(actions);
+  return group;
+}
+
+/// Open the import panel and put the cursor in the paste box.
+export function beginImport() {
+  importing = true;
+  lastIgnoredFlags = [];
+  renderDetail();
+  renderListControls();
+
+  const box = $(PASTE_FIELD_ID);
+  if (box) box.focus();
+}
+
+/// Create a profile from the pasted command, then hand over to the same
+/// post-create flow `addProfile` uses: select it, reload, focus the name.
+///
+/// The name is supplied here rather than asked for first: the whole point is
+/// that naming is the only manual step, and asking for it up front would put a
+/// form in front of the paste box.
+async function importProfile() {
+  const box = $(PASTE_FIELD_ID);
+  if (!box) return;
+
+  const command = box.value.trim();
+  if (!command) {
+    showError('Could not import', 'Paste a cloud-sql-proxy command first.');
+    return;
+  }
+
+  note('save-note', 'Importing…');
+  try {
+    const created = await invoke('import_profile', {
+      name: NEW_PROFILE_NAME,
+      command,
+    });
+    clearError();
+
+    importing = false;
+    lastIgnoredFlags = created.ignoredFlags || [];
+    setSelectedId(created.id);
+    await loadProfiles();
+    note('save-note', 'Imported.');
+
+    const field = $(NAME_FIELD_ID);
+    if (field) {
+      field.focus();
+      field.select();
+    }
+  } catch (error) {
+    // The panel stays open with the text still in it: the errors this command
+    // returns are all things the user fixes by editing what they pasted.
+    note('save-note', '');
+    showError('Could not import that command', error);
+  }
+}
+
 /// Delete the selected profile after confirming, saying plainly what will
 /// happen to it if it is currently running.
 export async function deleteProfile() {
@@ -428,5 +596,11 @@ async function confirmDiscardingEdits(action) {
 /// Enable or disable the delete button. Nothing selected means nothing to
 /// delete; a greyed-out button says so better than an error would.
 export function renderListControls() {
-  $('btn-delete').disabled = selectedProfile() === null;
+  // While the import panel is open the detail pane no longer shows the
+  // selected environment, so acting on the selection would operate on
+  // something the user cannot currently see. Import is also its own toggle:
+  // pressing it again mid-import should do nothing rather than reset the box.
+  $('btn-delete').disabled = importing || selectedProfile() === null;
+  $('btn-add').disabled = importing;
+  $('btn-import').disabled = importing;
 }

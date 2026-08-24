@@ -8,6 +8,46 @@
   /* Tight to the list above; the group's own corner radius is 10px, so the
      controls sit just inside its left edge. */
   margin: 6px 0 0 1px;
+  align-items: center;
+}
+
+/* Pushes a control to the far end of its row, away from the joined +/- pair
+   so the two do not read as one group of three. */
+.push-left {
+  margin-left: auto;
+}
+
+/* The import paste box. Monospace because every character in a command line is
+   significant and proportional type hides a missing colon; `pre-wrap` so a
+   pasted line continuation stays visible rather than scrolling off. */
+.paste-box {
+  width: 100%;
+  min-height: 92px;
+  box-sizing: border-box;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  resize: vertical;
+  padding: 7px 8px;
+  border: 1px solid var(--field-border);
+  border-radius: 6px;
+  background: var(--field-bg);
+  color: var(--text);
+}
+
+.paste-box:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+/* The row of actions under the paste box. */
+.paste-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 8px;
 }
 
 .gutter-button {

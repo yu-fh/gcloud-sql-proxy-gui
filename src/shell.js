@@ -146,8 +146,11 @@ export function wireWindowKeys(defaultAction) {
       }
       // A field being edited gives up focus rather than closing the window, so
       // Escape never discards a window's worth of typing in one keystroke.
+      // TEXTAREA counts: the import box is one, and it holds the most typing of
+      // anything here -- falling through to hide() would throw away a pasted
+      // command with no way to get it back.
       const active = document.activeElement;
-      if (active && active.tagName === 'INPUT') {
+      if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA')) {
         active.blur();
         return;
       }
@@ -158,11 +161,20 @@ export function wireWindowKeys(defaultAction) {
   // Return activates the default button, as it does in a sheet -- but not while
   // a button already has focus (that would double-fire) and not in the logs
   // section, which has no default action.
+  //
+  // TEXTAREA is exempt for a different reason than the other two: Return is a
+  // newline there, not an activation. A pasted command is multi-line, so a user
+  // tidying one up would otherwise fire Done mid-edit.
   document.addEventListener('keydown', (event) => {
     if (event.key !== 'Enter' || event.metaKey) return;
     if (currentView() === 'logs') return;
     const active = document.activeElement;
-    if (active && (active.tagName === 'BUTTON' || active.tagName === 'SELECT')) {
+    if (
+      active &&
+      (active.tagName === 'BUTTON' ||
+        active.tagName === 'SELECT' ||
+        active.tagName === 'TEXTAREA')
+    ) {
       return;
     }
     const target = defaultAction();

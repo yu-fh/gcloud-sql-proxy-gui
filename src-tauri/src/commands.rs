@@ -30,7 +30,7 @@ use tauri::State;
 use fh_cloud_sql_proxy_gui::core::audit::{Category, Record, Severity};
 use fh_cloud_sql_proxy_gui::core::profile::{Profile, ProfileConfig, CURRENT_SCHEMA_VERSION};
 use fh_cloud_sql_proxy_gui::core::proxy::ProxyStatus;
-use fh_cloud_sql_proxy_gui::core::{audit, preflight, state, store};
+use fh_cloud_sql_proxy_gui::core::{audit, import, preflight, profile, state, store};
 
 use crate::app_state::SharedState;
 
@@ -311,6 +311,95 @@ pub async fn add_profile(state: State<'_, SharedState>, name: String) -> Result<
     );
 
     Ok(profile)
+}
+
+/// A newly imported profile, plus what the import could not carry across.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportView {
+    #[serde(flatten)]
+    pub profile: Profile,
+    /// Flags from the pasted command this app has no field for, already
+    /// redacted where a value could be a credential. Empty means the profile
+    /// reproduces the command; non-empty means it does not, and only the user
+    /// can judge whether the difference matters.
+    pub ignored_flags: Vec<String>,
+}
+
+/// Create a profile from a pasted `cloud-sql-proxy` command line.
+///
+/// The sibling of [`add_profile`]: same operation, different source of the
+/// initial values. `add_profile` starts blank and makes the user transcribe
+/// their command into the form; this reads the command directly, which is the
+/// copying the app exists to remove.
+///
+/// The name is still the caller's, because a command line does not carry one.
+///
+/// Parsing happens **before** the id is allocated, so a paste that cannot be
+/// understood consumes nothing. As with `add_profile`, the config guard is held
+/// across generate + validate + write + update so a concurrent add cannot pick
+/// the same id.
+#[tauri::command]
+pub async fn import_profile(
+    state: State<'_, SharedState>,
+    name: String,
+    command: String,
+) -> Result<ImportView, String> {
+    let mut config = state.config.lock().await;
+
+    let imported = import::parse_command(&command).map_err(|e| e.to_string())?;
+
+    let taken: Vec<String> = config.profiles.iter().map(|p| p.id.clone()).collect();
+    let id = profile::unique_id_from_name(&name, &taken);
+
+    let profile = Profile {
+        id,
+        name,
+        ..imported.profile
+    };
+
+    let mut next = config.clone();
+    next.profiles.push(profile.clone());
+    next.validate().map_err(|e| e.to_string())?;
+    store::save(&state.config_path, &next).map_err(|e| e.to_string())?;
+    *config = next;
+
+    // The outcome is logged, never the input. `command` can contain a bearer
+    // token or a credentials path -- this is the one command whose argument is
+    // arbitrary user-pasted text -- and the audit log is deliberately
+    // unredacted and small enough to mail to a colleague. Everything
+    // diagnostic about the result is in the profile anyway.
+    state.audit.info(
+        Category::Action,
+        Some(&profile.id),
+        format!(
+            "imported profile '{}' (name '{}') from a pasted command: project '{}', {} instance(s) on {:?}",
+            profile.id,
+            profile.name,
+            profile.project,
+            profile.instances.len(),
+            profile.ports(),
+        ),
+    );
+
+    // Warned, not just noted: "why doesn't this behave like my command" has to
+    // be answerable from the log alone, after the window is closed.
+    if !imported.ignored_flags.is_empty() {
+        state.audit.warn(
+            Category::Action,
+            Some(&profile.id),
+            format!(
+                "import dropped {} flag(s) this app does not model: {}",
+                imported.ignored_flags.len(),
+                imported.ignored_flags.join(", "),
+            ),
+        );
+    }
+
+    Ok(ImportView {
+        profile,
+        ignored_flags: imported.ignored_flags,
+    })
 }
 
 /// Delete the profile `id` and persist.

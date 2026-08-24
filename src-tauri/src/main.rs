@@ -82,6 +82,7 @@ fn main() {
             commands::plan_for,
             commands::save_profiles,
             commands::add_profile,
+            commands::import_profile,
             commands::delete_profile,
             commands::start_profile,
             commands::stop_profile,

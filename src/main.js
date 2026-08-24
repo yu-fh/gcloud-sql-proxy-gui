@@ -18,6 +18,7 @@ import { setSelectionListener } from './env-list.js';
 import { loadLogs, revealLogFile } from './logs-view.js';
 import {
   addProfile,
+  beginImport,
   deleteProfile,
   loadProfiles,
   renderSelectionDependents,
@@ -43,6 +44,7 @@ setSelectionListener(renderSelectionDependents);
 $('btn-save').addEventListener('click', saveProfiles);
 $('btn-add').addEventListener('click', addProfile);
 $('btn-delete').addEventListener('click', deleteProfile);
+$('btn-import').addEventListener('click', beginImport);
 $('btn-reload').addEventListener('click', () => {
   note('save-note', '');
   loadProfiles();

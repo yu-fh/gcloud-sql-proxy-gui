@@ -566,7 +566,12 @@ async fn push_log(logs: &Logs, cap: usize, profile_id: &str, text: String) {
 
 /// Build the `cloud-sql-proxy` argument list for `profile`: flags first, then
 /// impersonation, then one positional argument per instance.
-fn args_for(profile: &Profile) -> Vec<String> {
+///
+/// `pub(crate)` for one reason: [`crate::core::import`] parses this format back
+/// into a `Profile`, and its round-trip test calls this to prove the two agree.
+/// Without that test the emitter and the parser can drift apart silently, and
+/// the symptom is a user whose own working command will not import.
+pub(crate) fn args_for(profile: &Profile) -> Vec<String> {
     let mut args = Vec::new();
 
     if profile.flags.auto_iam_authn {
