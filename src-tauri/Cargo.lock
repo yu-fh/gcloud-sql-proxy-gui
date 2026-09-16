@@ -834,7 +834,7 @@ dependencies = [
 
 [[package]]
 name = "fh-cloud-sql-proxy-gui"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "dirs 5.0.1",
  "objc2",
