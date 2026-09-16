@@ -535,20 +535,21 @@ fn appearance<R: Runtime>(_app: &AppHandle<R>, _fallback: Appearance) -> Appeara
 /// `icon_as_template(false)` is load-bearing for this artwork, and why that in
 /// turn is what forces two sets rather than one.
 ///
-/// Ten assets: five frames times two menu bar appearances. The frames are the
-/// four [`IconState`]s plus the dark half of the `Connecting` blink. They are
+/// Eight assets: four states times two menu bar appearances. The `Connecting`
+/// blink needs no ninth and tenth, because its dark half is the bare glyph and
+/// that is exactly the `Disconnected` artwork. They are
 /// drawn by `icons/generate-tray-icons.py` — an isometric stack of three slabs
 /// plus a status dot — and rasterised to 72px. **That script is the source of
-/// record, not the PNGs**: the ten assets differ along three axes (state ink,
-/// appearance ink, blink phase) that have to stay in step, and hand-editing them
-/// is how the previous set drifted into shipping `connected` with no dot at all
-/// and `connecting` with a grey one no user could see. Change the geometry
-/// there and re-run it; do not edit a PNG in place.
+/// record, not the PNGs**: the assets differ along axes that have to stay in
+/// step, and hand-editing them is how the previous set drifted into shipping
+/// `connected` with no dot at all and `connecting` with a grey one no user could
+/// see. Change the geometry there and re-run it; do not edit a PNG in place.
 ///
 /// The status dots are `systemRed` / `systemGreen` / `systemBlue` and are exempt
 /// from the appearance recolour — a red error has to read as red on either menu
-/// bar. Each dot carries a ring in the opposite ink so it stays separated from
-/// the glyph behind it.
+/// bar. They are drawn flat, with no outline: the dot sits outside the glyph's
+/// silhouette, so a separating ring had nothing to separate and read only as a
+/// black edge around an otherwise clean dot.
 ///
 /// **These are 72px `@4x` assets**, matching the 18pt status item at 4x. 36px
 /// (2x) was already pixel-exact for a Retina display; 72px costs ~1KB per asset
@@ -620,12 +621,6 @@ const TRAY_ICON_CONNECTING_LIGHT: &[u8] = include_bytes!("../icons/tray-connecti
 const TRAY_ICON_CONNECTED_LIGHT: &[u8] = include_bytes!("../icons/tray-connected-light.png");
 const TRAY_ICON_ERROR_LIGHT: &[u8] = include_bytes!("../icons/tray-error-light.png");
 
-/// The dark half of the `Connecting` blink: the same glyph with the dot dropped.
-/// Only `Connecting` blinks, so only `Connecting` has an off frame.
-const TRAY_ICON_CONNECTING_OFF: &[u8] = include_bytes!("../icons/tray-connecting-off.png");
-const TRAY_ICON_CONNECTING_OFF_LIGHT: &[u8] =
-    include_bytes!("../icons/tray-connecting-off-light.png");
-
 /// Which half of the blink cycle a `Connecting` icon is being drawn in.
 ///
 /// A third selection dimension, and deliberately *not* a fifth [`IconState`]:
@@ -663,9 +658,12 @@ impl Blink {
 /// be invisible — the tray still shows *an* icon.
 fn tray_icon_bytes(state: IconState, appearance: Appearance, blink: Blink) -> &'static [u8] {
     match (state, appearance, blink) {
-        // The only cells where the phase changes the answer.
-        (IconState::Connecting, Appearance::Dark, Blink::Off) => TRAY_ICON_CONNECTING_OFF,
-        (IconState::Connecting, Appearance::Light, Blink::Off) => TRAY_ICON_CONNECTING_OFF_LIGHT,
+        // The only cells where the phase changes the answer. The dark half of the
+        // blink is the bare glyph, which is pixel-for-pixel what `Disconnected`
+        // already is, so it reuses that asset rather than embedding a second
+        // copy of the same bytes under another name.
+        (IconState::Connecting, Appearance::Dark, Blink::Off) => TRAY_ICON_DISCONNECTED,
+        (IconState::Connecting, Appearance::Light, Blink::Off) => TRAY_ICON_DISCONNECTED_LIGHT,
 
         (IconState::Disconnected, Appearance::Dark, _) => TRAY_ICON_DISCONNECTED,
         (IconState::Connecting, Appearance::Dark, _) => TRAY_ICON_CONNECTING,
@@ -1006,12 +1004,16 @@ fn spawn_poll_loop<R: Runtime>(
                 tokio::time::sleep(slice).await;
                 slept += slice;
 
-                // The last slice falls through to the full update below rather
-                // than repainting twice in the same instant.
-                if slept < POLL_INTERVAL {
-                    blink = blink.flipped();
-                    repaint_blink(&app, &mut last_drawn, blink);
-                }
+                // Every slice advances the phase, the last one included. An
+                // earlier version skipped the final slice to avoid painting
+                // twice in one instant, which with a 500ms blink inside a 1s
+                // poll left exactly one flip per second — half the intended
+                // rate, and slow enough to read as "not blinking at all". The
+                // double paint it was avoiding does not exist: `update_icon`
+                // below is given this same `blink`, and its `last_drawn` guard
+                // makes the second write a no-op.
+                blink = blink.flipped();
+                repaint_blink(&app, &mut last_drawn, blink);
             }
 
             // Both guards are dropped inside `snapshot`, before any of the
@@ -1631,10 +1633,15 @@ mod tests {
         (IconState::Error, Appearance::Light, Blink::Off),
     ];
 
-    /// The ten triples that must each map to their own asset: every state in
-    /// both appearances, plus `Connecting`'s off frame in both. Any two of these
+    /// The eight triples that must each map to their own asset: every state in
+    /// both appearances, in the phase it is actually shown in. Any two of these
     /// resolving to the same bytes is a mapping bug.
-    const DISTINCT_FRAMES: [(IconState, Appearance, Blink); 10] = [
+    ///
+    /// `Connecting`'s off phase is deliberately absent. It is the bare glyph,
+    /// which is what `Disconnected` already is, so it shares that asset on
+    /// purpose — see `tray_icon_bytes`. Listing it here would assert the
+    /// opposite of the intended behaviour.
+    const DISTINCT_FRAMES: [(IconState, Appearance, Blink); 8] = [
         (IconState::Disconnected, Appearance::Dark, Blink::On),
         (IconState::Connecting, Appearance::Dark, Blink::On),
         (IconState::Connected, Appearance::Dark, Blink::On),
@@ -1643,8 +1650,6 @@ mod tests {
         (IconState::Connecting, Appearance::Light, Blink::On),
         (IconState::Connected, Appearance::Light, Blink::On),
         (IconState::Error, Appearance::Light, Blink::On),
-        (IconState::Connecting, Appearance::Dark, Blink::Off),
-        (IconState::Connecting, Appearance::Light, Blink::Off),
     ];
 
     /// Read a PNG's declared dimensions straight out of its IHDR chunk.
@@ -1835,6 +1840,22 @@ mod tests {
     }
 
     #[test]
+    fn the_dark_half_of_the_blink_is_the_disconnected_glyph() {
+        // Not an accident to be tidied away later: the off phase drops the dot,
+        // and a dotless glyph is what `Disconnected` is. Pinned so that a future
+        // change to either one has to face the sharing rather than silently
+        // break the blink or the disconnected icon.
+        for appearance in [Appearance::Dark, Appearance::Light] {
+            assert_eq!(
+                tray_icon_bytes(IconState::Connecting, appearance, Blink::Off),
+                tray_icon_bytes(IconState::Disconnected, appearance, Blink::On),
+                "connecting-off and disconnected should be the same artwork on {}",
+                appearance.as_str()
+            );
+        }
+    }
+
+    #[test]
     fn blink_flips_between_exactly_two_phases() {
         assert_eq!(Blink::On.flipped(), Blink::Off);
         assert_eq!(Blink::Off.flipped(), Blink::On);
@@ -1854,6 +1875,29 @@ mod tests {
             POLL_INTERVAL.as_millis() % BLINK_INTERVAL.as_millis(),
             0,
             "blink interval must divide the poll interval evenly"
+        );
+    }
+
+    #[test]
+    fn the_phase_advances_once_per_blink_interval_not_once_per_poll() {
+        // This is the check the original test was missing, and the reason the
+        // first build did not visibly blink: the loop skipped the flip on its
+        // final slice, so at 500ms inside 1s the phase advanced once a second
+        // rather than twice, which reads as a static icon.
+        //
+        // Simulated rather than slept: the loop's arithmetic is the thing under
+        // test, and a real 1s sleep in a unit test buys nothing.
+        let mut slept = Duration::ZERO;
+        let mut flips = 0;
+        while slept < POLL_INTERVAL {
+            let slice = BLINK_INTERVAL.min(POLL_INTERVAL - slept);
+            slept += slice;
+            flips += 1;
+        }
+        assert_eq!(
+            flips,
+            POLL_INTERVAL.as_millis() / BLINK_INTERVAL.as_millis(),
+            "one phase flip per blink interval across a full poll interval"
         );
     }
 

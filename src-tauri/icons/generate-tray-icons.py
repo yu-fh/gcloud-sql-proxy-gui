@@ -76,11 +76,13 @@ DOT = {
     "connecting": (10, 132, 255, 255), # systemBlue
 }
 
-# The dot gets a ring in the menu bar's own ground so it stays legible where it
-# overlaps the glyph. Transparent-black on a dark bar, transparent-white on a
-# light one -- i.e. the direction that separates, not a fixed colour.
-RING = {"dark": (0, 0, 0, 140), "light": (255, 255, 255, 170)}
-RING_WIDTH = 0.030  # of canvas
+# No ring around the dot. An earlier version drew one in the menu bar's own
+# ground -- translucent black on a dark bar -- to separate the dot from the glyph
+# behind it. But the dot sits outside the glyph's silhouette, in the corner the
+# stack is inset from, so there was nothing to separate: the ring only read as a
+# black outline drawn around an otherwise clean dot. A white ring is worse, not
+# better -- on a dark menu bar it becomes a bright halo that pulls more attention
+# than the colour it surrounds.
 
 
 def draw_glyph(draw, ink):
@@ -117,12 +119,10 @@ def draw_glyph(draw, ink):
         draw.ellipse([cx - half, top_y, cx + half, top_y + ell_h], fill=ink["top"])
 
 
-def draw_dot(draw, colour, ring):
-    """The status dot, with a separating ring against the glyph behind it."""
+def draw_dot(draw, colour):
+    """The status dot: flat colour, no outline. See the note on RING above."""
     r = DOT_DIAMETER * CANVAS / 2
     cx, cy = DOT_CX * CANVAS, DOT_CY * CANVAS
-    rw = RING_WIDTH * CANVAS
-    draw.ellipse([cx - r - rw, cy - r - rw, cx + r + rw, cy + r + rw], fill=ring)
     draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=colour)
 
 
@@ -132,21 +132,23 @@ def render(appearance, dot_colour):
     draw = ImageDraw.Draw(img)
     draw_glyph(draw, INK[appearance])
     if dot_colour is not None:
-        draw_dot(draw, dot_colour, RING[appearance])
+        draw_dot(draw, dot_colour)
     return img.resize((TARGET_PX, TARGET_PX), Image.LANCZOS)
 
 
 def main():
     # `disconnected` carries no dot: nothing is connected, so there is no status
     # to signal, and an empty menu bar slot would leave no way to open the menu.
-    # `connecting` gets two frames that the poll loop alternates between; the
-    # off frame keeps the ring so the glyph does not shift as it blinks.
+    # `connecting` blinks between its dot frame and the bare glyph. With no ring
+    # left to hold, that dark half is pixel-for-pixel what `disconnected` already
+    # is, so it is not generated as its own file -- `tray.rs` points the off phase
+    # at the disconnected asset instead. Two names for identical bytes would be
+    # two things to keep in step for no benefit.
     assets = {
         "tray-disconnected": None,
         "tray-connected": DOT["connected"],
         "tray-error": DOT["error"],
         "tray-connecting": DOT["connecting"],
-        "tray-connecting-off": (0, 0, 0, 0),
     }
 
     for name, dot in assets.items():
