@@ -118,6 +118,15 @@ use crate::window::{open_settings, Section};
 /// How often the menu re-reads live status. See the module docs.
 const POLL_INTERVAL: Duration = Duration::from_secs(1);
 
+/// How long each half of the `Connecting` blink is held.
+///
+/// A divisor of [`POLL_INTERVAL`], so the blink subdivides a status tick evenly
+/// and the two never drift against each other. 500ms reads as a deliberate
+/// pulse: fast enough to say "working on it", slow enough not to strobe in the
+/// corner of the eye, which a menu bar that the user is not looking at has to
+/// avoid.
+const BLINK_INTERVAL: Duration = Duration::from_millis(500);
+
 /// Menu item ids. Profile toggles get `profile:{id}`, so a profile named
 /// `logs` cannot collide with the `Logs…` item.
 const ID_STATUS: &str = "status";
@@ -526,15 +535,24 @@ fn appearance<R: Runtime>(_app: &AppHandle<R>, _fallback: Appearance) -> Appeara
 /// `icon_as_template(false)` is load-bearing for this artwork, and why that in
 /// turn is what forces two sets rather than one.
 ///
-/// Eight assets: four states times two menu bar appearances. They were drawn
-/// as flat vector geometry — an isometric stack of three slabs plus a status
-/// dot — and rasterised to 36px; the PNGs in `icons/` are the source of record.
-/// The two sets share identical geometry and differ only in ink, so a change to
-/// one that is not mirrored in the other will show as the mark shifting when the
-/// menu bar appearance changes.
+/// Ten assets: five frames times two menu bar appearances. The frames are the
+/// four [`IconState`]s plus the dark half of the `Connecting` blink. They are
+/// drawn by `icons/generate-tray-icons.py` — an isometric stack of three slabs
+/// plus a status dot — and rasterised to 72px. **That script is the source of
+/// record, not the PNGs**: the ten assets differ along three axes (state ink,
+/// appearance ink, blink phase) that have to stay in step, and hand-editing them
+/// is how the previous set drifted into shipping `connected` with no dot at all
+/// and `connecting` with a grey one no user could see. Change the geometry
+/// there and re-run it; do not edit a PNG in place.
 ///
-/// **These are the 36px `@2x` assets** — unlike the 18px set that used to be
-/// here, this is the size that actually renders sharply.
+/// The status dots are `systemRed` / `systemGreen` / `systemBlue` and are exempt
+/// from the appearance recolour — a red error has to read as red on either menu
+/// bar. Each dot carries a ring in the opposite ink so it stays separated from
+/// the glyph behind it.
+///
+/// **These are 72px `@4x` assets**, matching the 18pt status item at 4x. 36px
+/// (2x) was already pixel-exact for a Retina display; 72px costs ~1KB per asset
+/// and holds up on a 3x external panel too.
 ///
 /// # Pixels are backing store, not points
 ///
@@ -572,18 +590,19 @@ fn appearance<R: Runtime>(_app: &AppHandle<R>, _fallback: Appearance) -> Appeara
 /// comparing it against a neighbouring menu bar icon reports as "small and
 /// blurry".
 ///
-/// # What this does and does not fix
+/// # What asset size does and does not fix
 ///
-/// It fixes the blur: 36px is a pixel-exact 2x for an 18pt image. It does **not**
-/// change how much of the slot the glyph occupies, because 18 of the 22pt is
+/// It fixes the blur: 72px is a pixel-exact 4x for an 18pt image. It does **not**
+/// change how much of the slot the mark occupies, because 18 of the 22pt is
 /// `tray-icon`'s hardcoded choice and is not reachable from here. Embedding a
 /// larger asset cannot raise it; only patching or replacing that crate's macOS
-/// backend, or setting the size on the `NSImage` ourselves afterwards, could. If
-/// the glyph still reads as small next to its neighbours, that constant — not
-/// this asset size — is the thing to change.
+/// backend, or setting the size on the `NSImage` ourselves afterwards, could.
 ///
-/// The 24px and 48px variants are omitted: nothing here can use them, and an
-/// unused asset in the tree is an invitation to wire up the wrong one.
+/// So "make the dot bigger" is a *drawing* change, not a sizing one, and that is
+/// how it was done: the generator draws the glyph smaller within the frame and
+/// gives the dot 0.38 of the canvas where the superseded artwork gave it ~0.22.
+/// The mark still occupies 18pt; more of those 18pt are now the part carrying
+/// the signal.
 ///
 /// The dark-menu-bar set: the designer's artwork as delivered, white ink.
 const TRAY_ICON_DISCONNECTED: &[u8] = include_bytes!("../icons/tray-disconnected.png");
@@ -601,23 +620,61 @@ const TRAY_ICON_CONNECTING_LIGHT: &[u8] = include_bytes!("../icons/tray-connecti
 const TRAY_ICON_CONNECTED_LIGHT: &[u8] = include_bytes!("../icons/tray-connected-light.png");
 const TRAY_ICON_ERROR_LIGHT: &[u8] = include_bytes!("../icons/tray-error-light.png");
 
-/// The embedded bytes for one (state, appearance) pair.
+/// The dark half of the `Connecting` blink: the same glyph with the dot dropped.
+/// Only `Connecting` blinks, so only `Connecting` has an off frame.
+const TRAY_ICON_CONNECTING_OFF: &[u8] = include_bytes!("../icons/tray-connecting-off.png");
+const TRAY_ICON_CONNECTING_OFF_LIGHT: &[u8] =
+    include_bytes!("../icons/tray-connecting-off-light.png");
+
+/// Which half of the blink cycle a `Connecting` icon is being drawn in.
+///
+/// A third selection dimension, and deliberately *not* a fifth [`IconState`]:
+/// `icon_state` derives the state from proxy status by a precedence rule, and an
+/// "off" state has no proxy status to derive it from. Keeping the phase separate
+/// means the precedence logic stays a total function of the profile set and the
+/// blink stays a pure rendering concern.
+///
+/// For every state but `Connecting` the two phases select the same asset, so a
+/// non-connecting icon simply does not blink.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Blink {
+    /// The dot is drawn. The only phase a non-blinking state is ever in.
+    On,
+    /// The dot is omitted. Reached only by `Connecting`.
+    Off,
+}
+
+impl Blink {
+    /// The other half of the cycle.
+    fn flipped(self) -> Self {
+        match self {
+            Blink::On => Blink::Off,
+            Blink::Off => Blink::On,
+        }
+    }
+}
+
+/// The embedded bytes for one (state, appearance, blink phase) triple.
 ///
 /// Split out from [`tray_icon`] so the mapping can be tested without a Tauri
-/// runtime: the tests walk all eight pairs and assert both that each decodes to
-/// exactly `TRAY_ICON_PX` square and that no two pairs share an asset. A
-/// copy-paste slip that pointed two states at one image would otherwise be
-/// invisible — the tray still shows *an* icon.
-fn tray_icon_bytes(state: IconState, appearance: Appearance) -> &'static [u8] {
-    match (state, appearance) {
-        (IconState::Disconnected, Appearance::Dark) => TRAY_ICON_DISCONNECTED,
-        (IconState::Connecting, Appearance::Dark) => TRAY_ICON_CONNECTING,
-        (IconState::Connected, Appearance::Dark) => TRAY_ICON_CONNECTED,
-        (IconState::Error, Appearance::Dark) => TRAY_ICON_ERROR,
-        (IconState::Disconnected, Appearance::Light) => TRAY_ICON_DISCONNECTED_LIGHT,
-        (IconState::Connecting, Appearance::Light) => TRAY_ICON_CONNECTING_LIGHT,
-        (IconState::Connected, Appearance::Light) => TRAY_ICON_CONNECTED_LIGHT,
-        (IconState::Error, Appearance::Light) => TRAY_ICON_ERROR_LIGHT,
+/// runtime: the tests walk every combination and assert both that each decodes
+/// to exactly `TRAY_ICON_PX` square and that no two distinct frames share an
+/// asset. A copy-paste slip that pointed two states at one image would otherwise
+/// be invisible — the tray still shows *an* icon.
+fn tray_icon_bytes(state: IconState, appearance: Appearance, blink: Blink) -> &'static [u8] {
+    match (state, appearance, blink) {
+        // The only cells where the phase changes the answer.
+        (IconState::Connecting, Appearance::Dark, Blink::Off) => TRAY_ICON_CONNECTING_OFF,
+        (IconState::Connecting, Appearance::Light, Blink::Off) => TRAY_ICON_CONNECTING_OFF_LIGHT,
+
+        (IconState::Disconnected, Appearance::Dark, _) => TRAY_ICON_DISCONNECTED,
+        (IconState::Connecting, Appearance::Dark, _) => TRAY_ICON_CONNECTING,
+        (IconState::Connected, Appearance::Dark, _) => TRAY_ICON_CONNECTED,
+        (IconState::Error, Appearance::Dark, _) => TRAY_ICON_ERROR,
+        (IconState::Disconnected, Appearance::Light, _) => TRAY_ICON_DISCONNECTED_LIGHT,
+        (IconState::Connecting, Appearance::Light, _) => TRAY_ICON_CONNECTING_LIGHT,
+        (IconState::Connected, Appearance::Light, _) => TRAY_ICON_CONNECTED_LIGHT,
+        (IconState::Error, Appearance::Light, _) => TRAY_ICON_ERROR_LIGHT,
     }
 }
 
@@ -625,8 +682,12 @@ fn tray_icon_bytes(state: IconState, appearance: Appearance) -> &'static [u8] {
 ///
 /// Returns `None` only if the embedded PNG fails to decode, which would mean a
 /// corrupt build; callers fall back to a text title so the tray stays clickable.
-fn tray_icon(state: IconState, appearance: Appearance) -> Option<tauri::image::Image<'static>> {
-    tauri::image::Image::from_bytes(tray_icon_bytes(state, appearance)).ok()
+fn tray_icon(
+    state: IconState,
+    appearance: Appearance,
+    blink: Blink,
+) -> Option<tauri::image::Image<'static>> {
+    tauri::image::Image::from_bytes(tray_icon_bytes(state, appearance, blink)).ok()
 }
 
 /// The identity of the profile set a menu was built from: the ids, in order.
@@ -694,7 +755,9 @@ pub fn build<R: Runtime>(app: &tauri::App<R>, state: &SharedState) -> tauri::Res
     let initial_appearance = read_appearance();
     #[cfg(not(target_os = "macos"))]
     let initial_appearance = Appearance::Dark;
-    match tray_icon(initial.icon_state(), initial_appearance) {
+    // The tray is built in the dot-on phase; the poll loop starts the blink
+    // from there if the initial state happens to be `Connecting`.
+    match tray_icon(initial.icon_state(), initial_appearance, Blink::On) {
         Some(icon) => tray = tray.icon(icon),
         None => tray = tray.title("SQL"),
     }
@@ -755,56 +818,139 @@ pub fn build<R: Runtime>(app: &tauri::App<R>, state: &SharedState) -> tauri::Res
 /// with extra steps. Reading the appearance every tick is a cheap AppKit
 /// property read; it is the *write* and the audit record that are gated, so a
 /// flip costs exactly one record rather than one per tick.
+///
+/// # The blink is exempt from the audit, not from the guard
+///
+/// `blink` is an input to the *image* but not to the audit record: a blinking
+/// `Connecting` swaps the asset twice a second, and recording each swap would
+/// bury every real event under phase noise within a minute. So the early return
+/// compares the full triple — a phase flip must still reach `set_icon`, or there
+/// would be no blink — while `last`, which gates the record, carries only the
+/// pair. The result is that a phase flip repaints silently and a genuine state
+/// or appearance change is logged exactly once, as before.
 fn update_icon<R: Runtime>(
     app: &AppHandle<R>,
     state: &SharedState,
     snapshot: &Snapshot,
     last: &mut Option<(IconState, Appearance)>,
+    last_drawn: &mut Option<(IconState, Appearance, Blink)>,
+    blink: Blink,
 ) {
     // Keep the current appearance if it cannot be read, rather than letting a
     // failed read masquerade as a flip and repaint the icon wrongly.
     let current_appearance = last.map_or(Appearance::Dark, |(_, was)| was);
     let next = (snapshot.icon_state(), appearance(app, current_appearance));
-    if *last == Some(next) {
+    // Only `Connecting` blinks; forcing every other state to `On` keeps a stale
+    // `Off` from a just-ended connection from sticking to the next icon.
+    let phase = if next.0 == IconState::Connecting {
+        blink
+    } else {
+        Blink::On
+    };
+    let drawn = (next.0, next.1, phase);
+    if *last_drawn == Some(drawn) {
         return;
     }
-    let Some((tray, icon)) = app.tray_by_id(TRAY_ID).zip(tray_icon(next.0, next.1)) else {
+    let Some((tray, icon)) = app
+        .tray_by_id(TRAY_ID)
+        .zip(tray_icon(next.0, next.1, phase))
+    else {
         return;
     };
     if tray.set_icon(Some(icon)).is_ok() {
-        // Report whichever dimension actually moved. A status change and an
-        // appearance flip are different events to anyone reading the log, and
-        // collapsing both into one "state/appearance" line would make the
-        // common case (a status change) noisier for no gain.
-        let message = match *last {
-            Some((from_state, from_appearance)) if from_state == next.0 => format!(
-                "tray icon appearance: {} -> {} ({})",
-                from_appearance.as_str(),
-                next.1.as_str(),
-                next.0.as_str()
-            ),
-            Some((from_state, from_appearance)) if from_appearance == next.1 => format!(
-                "tray icon: {} -> {} ({} menu bar)",
-                from_state.as_str(),
-                next.0.as_str(),
-                next.1.as_str()
-            ),
-            Some((from_state, from_appearance)) => format!(
-                "tray icon: {} ({}) -> {} ({})",
-                from_state.as_str(),
-                from_appearance.as_str(),
-                next.0.as_str(),
-                next.1.as_str()
-            ),
-            None => format!(
-                "tray icon: unknown -> {} ({} menu bar)",
-                next.0.as_str(),
-                next.1.as_str()
-            ),
-        };
-        state.audit.info(Category::Event, None, message);
-        *last = Some(next);
+        *last_drawn = Some(drawn);
     }
+    // The record is gated on the pair, so a blink phase flip falls out here
+    // having already repainted.
+    if *last == Some(next) {
+        return;
+    }
+    // Report whichever dimension actually moved. A status change and an
+    // appearance flip are different events to anyone reading the log, and
+    // collapsing both into one "state/appearance" line would make the
+    // common case (a status change) noisier for no gain.
+    let message = match *last {
+        Some((from_state, from_appearance)) if from_state == next.0 => format!(
+            "tray icon appearance: {} -> {} ({})",
+            from_appearance.as_str(),
+            next.1.as_str(),
+            next.0.as_str()
+        ),
+        Some((from_state, from_appearance)) if from_appearance == next.1 => format!(
+            "tray icon: {} -> {} ({} menu bar)",
+            from_state.as_str(),
+            next.0.as_str(),
+            next.1.as_str()
+        ),
+        Some((from_state, from_appearance)) => format!(
+            "tray icon: {} ({}) -> {} ({})",
+            from_state.as_str(),
+            from_appearance.as_str(),
+            next.0.as_str(),
+            next.1.as_str()
+        ),
+        None => format!(
+            "tray icon: unknown -> {} ({} menu bar)",
+            next.0.as_str(),
+            next.1.as_str()
+        ),
+    };
+    state.audit.info(Category::Event, None, message);
+    *last = Some(next);
+}
+
+/// Swap the `Connecting` icon to the other blink phase, and nothing else.
+///
+/// The cheap half of the icon work, run on the blink sub-tick: it reuses the
+/// state and appearance already on screen rather than taking a snapshot or
+/// reading AppKit, because neither can have changed since the last full tick in
+/// any way this needs to react to — the next full tick will pick that up.
+///
+/// A no-op unless a `Connecting` icon is currently drawn, which is what keeps
+/// every other state from paying for the animation. `last_drawn` advances only
+/// on a successful write, so a failed swap is simply retried on the next phase.
+fn repaint_blink<R: Runtime>(
+    app: &AppHandle<R>,
+    last_drawn: &mut Option<(IconState, Appearance, Blink)>,
+    blink: Blink,
+) {
+    let Some((state, appearance)) = blink_repaint_target(*last_drawn, blink) else {
+        return;
+    };
+    let Some((tray, icon)) = app
+        .tray_by_id(TRAY_ID)
+        .zip(tray_icon(state, appearance, blink))
+    else {
+        return;
+    };
+    if tray.set_icon(Some(icon)).is_ok() {
+        *last_drawn = Some((state, appearance, blink));
+    }
+}
+
+/// What, if anything, the blink sub-tick should repaint.
+///
+/// The whole decision in [`repaint_blink`] that does not need a Tauri runtime,
+/// split out so it can be tested: whether a sub-tick repaints at all is the part
+/// with the failure modes worth pinning down (animating a state that should hold
+/// still, or writing the same frame twice a second), and it is untestable while
+/// it is tangled up with `AppHandle`.
+///
+/// `None` means leave the icon alone.
+fn blink_repaint_target(
+    last_drawn: Option<(IconState, Appearance, Blink)>,
+    blink: Blink,
+) -> Option<(IconState, Appearance)> {
+    let (state, appearance, drawn_phase) = last_drawn?;
+    // Only `Connecting` animates; every other state must hold still.
+    if state != IconState::Connecting {
+        return None;
+    }
+    // Already showing this phase — repainting would be an identical write.
+    if drawn_phase == blink {
+        return None;
+    }
+    Some((state, appearance))
 }
 
 /// Keep the status line and the profile rows in step with live status, and the
@@ -838,11 +984,35 @@ fn spawn_poll_loop<R: Runtime>(
         // Seeded from the state *and appearance* the tray was built with, so the
         // first tick does not redundantly rewrite an already-correct icon.
         let mut last_icon: Option<(IconState, Appearance)> = Some(initial_icon);
+        // What is actually on screen, blink phase included. Separate from
+        // `last_icon` because that one gates the audit record, which the blink
+        // is exempt from; see [`update_icon`].
+        let mut last_drawn: Option<(IconState, Appearance, Blink)> =
+            Some((initial_icon.0, initial_icon.1, Blink::On));
+        let mut blink = Blink::On;
         let mut last_labels: Vec<String> = vec![String::new(); handles.profile_items.len()];
         let mut last_checked: Vec<Option<bool>> = vec![None; handles.profile_items.len()];
 
         loop {
-            tokio::time::sleep(POLL_INTERVAL).await;
+            // Sleep the status interval in blink-sized slices, repainting the
+            // icon between them. Only the icon moves on a blink sub-tick: a
+            // snapshot takes both locks and rebuilds every label, and doing that
+            // twice a second to animate one dot would be pure waste. The status
+            // cadence is unchanged — the loop body below still runs once per
+            // `POLL_INTERVAL`.
+            let mut slept = Duration::ZERO;
+            while slept < POLL_INTERVAL {
+                let slice = BLINK_INTERVAL.min(POLL_INTERVAL - slept);
+                tokio::time::sleep(slice).await;
+                slept += slice;
+
+                // The last slice falls through to the full update below rather
+                // than repainting twice in the same instant.
+                if slept < POLL_INTERVAL {
+                    blink = blink.flipped();
+                    repaint_blink(&app, &mut last_drawn, blink);
+                }
+            }
 
             // Both guards are dropped inside `snapshot`, before any of the
             // menu writes below — see the module docs on locking. The rebuild
@@ -904,7 +1074,14 @@ fn spawn_poll_loop<R: Runtime>(
                     // the `continue` below skips the icon update further down,
                     // so it has to happen here or the icon stays stale until
                     // some later status change happens to move it.
-                    update_icon(&app, &state, &snapshot, &mut last_icon);
+                    update_icon(
+                        &app,
+                        &state,
+                        &snapshot,
+                        &mut last_icon,
+                        &mut last_drawn,
+                        blink,
+                    );
 
                     // The freshly built items already carry this snapshot's
                     // text and checked state, so there is nothing left to
@@ -922,7 +1099,14 @@ fn spawn_poll_loop<R: Runtime>(
                 last_status = status_line;
             }
 
-            update_icon(&app, &state, &snapshot, &mut last_icon);
+            update_icon(
+                &app,
+                &state,
+                &snapshot,
+                &mut last_icon,
+                &mut last_drawn,
+                blink,
+            );
 
             // `snapshot.rows` follows config order, the same order the items
             // were built in, and `ids == known_ids` above establishes that the
@@ -1421,18 +1605,46 @@ mod tests {
     /// Kept as an exact number rather than a lower bound because that is what
     /// would have caught the 18px regression: an asset silently at 1x is not a
     /// decode failure and not visible in a diff, it is just soft.
-    const TRAY_ICON_PX: u32 = 36;
+    const TRAY_ICON_PX: u32 = 72;
 
-    /// Every (state, appearance) pair the tray can ask for.
-    const ALL_PAIRS: [(IconState, Appearance); 8] = [
-        (IconState::Disconnected, Appearance::Dark),
-        (IconState::Connecting, Appearance::Dark),
-        (IconState::Connected, Appearance::Dark),
-        (IconState::Error, Appearance::Dark),
-        (IconState::Disconnected, Appearance::Light),
-        (IconState::Connecting, Appearance::Light),
-        (IconState::Connected, Appearance::Light),
-        (IconState::Error, Appearance::Light),
+    /// Every (state, appearance, phase) triple the tray can ask for.
+    ///
+    /// Sixteen triples, but only ten distinct assets: for every state but
+    /// `Connecting` the two phases select the same image, which is what makes a
+    /// non-connecting icon hold still. `DISTINCT_FRAMES` is the ten.
+    const ALL_TRIPLES: [(IconState, Appearance, Blink); 16] = [
+        (IconState::Disconnected, Appearance::Dark, Blink::On),
+        (IconState::Connecting, Appearance::Dark, Blink::On),
+        (IconState::Connected, Appearance::Dark, Blink::On),
+        (IconState::Error, Appearance::Dark, Blink::On),
+        (IconState::Disconnected, Appearance::Light, Blink::On),
+        (IconState::Connecting, Appearance::Light, Blink::On),
+        (IconState::Connected, Appearance::Light, Blink::On),
+        (IconState::Error, Appearance::Light, Blink::On),
+        (IconState::Disconnected, Appearance::Dark, Blink::Off),
+        (IconState::Connecting, Appearance::Dark, Blink::Off),
+        (IconState::Connected, Appearance::Dark, Blink::Off),
+        (IconState::Error, Appearance::Dark, Blink::Off),
+        (IconState::Disconnected, Appearance::Light, Blink::Off),
+        (IconState::Connecting, Appearance::Light, Blink::Off),
+        (IconState::Connected, Appearance::Light, Blink::Off),
+        (IconState::Error, Appearance::Light, Blink::Off),
+    ];
+
+    /// The ten triples that must each map to their own asset: every state in
+    /// both appearances, plus `Connecting`'s off frame in both. Any two of these
+    /// resolving to the same bytes is a mapping bug.
+    const DISTINCT_FRAMES: [(IconState, Appearance, Blink); 10] = [
+        (IconState::Disconnected, Appearance::Dark, Blink::On),
+        (IconState::Connecting, Appearance::Dark, Blink::On),
+        (IconState::Connected, Appearance::Dark, Blink::On),
+        (IconState::Error, Appearance::Dark, Blink::On),
+        (IconState::Disconnected, Appearance::Light, Blink::On),
+        (IconState::Connecting, Appearance::Light, Blink::On),
+        (IconState::Connected, Appearance::Light, Blink::On),
+        (IconState::Error, Appearance::Light, Blink::On),
+        (IconState::Connecting, Appearance::Dark, Blink::Off),
+        (IconState::Connecting, Appearance::Light, Blink::Off),
     ];
 
     /// Read a PNG's declared dimensions straight out of its IHDR chunk.
@@ -1455,12 +1667,12 @@ mod tests {
         // soft. The 18px set that used to be here was a 1x asset on a Retina
         // display, which is what "small and blurry" was. See the comment on the
         // `include_bytes!` block for the measurements.
-        for (state, appearance) in ALL_PAIRS {
-            let bytes = tray_icon_bytes(state, appearance);
+        for (state, appearance, blink) in ALL_TRIPLES {
+            let bytes = tray_icon_bytes(state, appearance, blink);
             assert_eq!(
                 png_dimensions(bytes),
                 (TRAY_ICON_PX, TRAY_ICON_PX),
-                "{} / {} is not {TRAY_ICON_PX}x{TRAY_ICON_PX}",
+                "{} / {} / {blink:?} is not {TRAY_ICON_PX}x{TRAY_ICON_PX}",
                 state.as_str(),
                 appearance.as_str()
             );
@@ -1474,10 +1686,10 @@ mod tests {
         // dimensions are re-checked here on the *decoded* image rather than the
         // header, because `Image::from_bytes` is what actually feeds the menu
         // bar and it is its notion of the size that governs.
-        for (state, appearance) in ALL_PAIRS {
-            let icon = tray_icon(state, appearance).unwrap_or_else(|| {
+        for (state, appearance, blink) in ALL_TRIPLES {
+            let icon = tray_icon(state, appearance, blink).unwrap_or_else(|| {
                 panic!(
-                    "{} / {} failed to decode",
+                    "{} / {} / {blink:?} failed to decode",
                     state.as_str(),
                     appearance.as_str()
                 )
@@ -1485,7 +1697,7 @@ mod tests {
             assert_eq!(
                 (icon.width(), icon.height()),
                 (TRAY_ICON_PX, TRAY_ICON_PX),
-                "decoded {} / {} is not {TRAY_ICON_PX}x{TRAY_ICON_PX}",
+                "decoded {} / {} / {blink:?} is not {TRAY_ICON_PX}x{TRAY_ICON_PX}",
                 state.as_str(),
                 appearance.as_str()
             );
@@ -1497,12 +1709,12 @@ mod tests {
         // A copy-paste slip in `tray_icon_bytes` that pointed two pairs at one
         // image is otherwise invisible: the tray still shows *an* icon, just the
         // wrong one, and only for whichever state nobody was watching.
-        for (i, &(state, appearance)) in ALL_PAIRS.iter().enumerate() {
-            for &(other_state, other_appearance) in &ALL_PAIRS[i + 1..] {
+        for (i, &(state, appearance, blink)) in DISTINCT_FRAMES.iter().enumerate() {
+            for &(other_state, other_appearance, other_blink) in &DISTINCT_FRAMES[i + 1..] {
                 assert_ne!(
-                    tray_icon_bytes(state, appearance),
-                    tray_icon_bytes(other_state, other_appearance),
-                    "{} / {} and {} / {} are the same asset",
+                    tray_icon_bytes(state, appearance, blink),
+                    tray_icon_bytes(other_state, other_appearance, other_blink),
+                    "{} / {} / {blink:?} and {} / {} / {other_blink:?} are the same asset",
                     state.as_str(),
                     appearance.as_str(),
                     other_state.as_str(),
@@ -1526,12 +1738,123 @@ mod tests {
             IconState::Error,
         ] {
             assert_ne!(
-                tray_icon_bytes(state, Appearance::Dark),
-                tray_icon_bytes(state, Appearance::Light),
+                tray_icon_bytes(state, Appearance::Dark, Blink::On),
+                tray_icon_bytes(state, Appearance::Light, Blink::On),
                 "{} has the same asset for both appearances",
                 state.as_str()
             );
         }
+    }
+
+    #[test]
+    fn only_connecting_changes_asset_between_blink_phases() {
+        // The blink has to be invisible to every other state. If a phase flip
+        // moved, say, the `Connected` icon, the menu bar would pulse for as long
+        // as the proxy stayed up — and nothing else in the suite would catch it,
+        // because both frames would still be the right size and decode fine.
+        for appearance in [Appearance::Dark, Appearance::Light] {
+            for state in [
+                IconState::Disconnected,
+                IconState::Connected,
+                IconState::Error,
+            ] {
+                assert_eq!(
+                    tray_icon_bytes(state, appearance, Blink::On),
+                    tray_icon_bytes(state, appearance, Blink::Off),
+                    "{} / {} blinks but should not",
+                    state.as_str(),
+                    appearance.as_str()
+                );
+            }
+            assert_ne!(
+                tray_icon_bytes(IconState::Connecting, appearance, Blink::On),
+                tray_icon_bytes(IconState::Connecting, appearance, Blink::Off),
+                "connecting / {} does not blink",
+                appearance.as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn only_a_connecting_icon_repaints_on_a_blink_sub_tick() {
+        // The sub-tick fires twice a second for the life of the app. If it
+        // repainted anything but `Connecting`, a settled icon would pulse.
+        for state in [
+            IconState::Disconnected,
+            IconState::Connected,
+            IconState::Error,
+        ] {
+            assert_eq!(
+                blink_repaint_target(Some((state, Appearance::Dark, Blink::On)), Blink::Off),
+                None,
+                "{} would repaint on a blink sub-tick",
+                state.as_str()
+            );
+        }
+        assert_eq!(
+            blink_repaint_target(
+                Some((IconState::Connecting, Appearance::Dark, Blink::On)),
+                Blink::Off
+            ),
+            Some((IconState::Connecting, Appearance::Dark)),
+        );
+    }
+
+    #[test]
+    fn a_blink_sub_tick_in_the_phase_already_drawn_is_not_repainted() {
+        // The phase counter runs whether or not anything is connecting, so it can
+        // arrive already matching what is on screen — after a state change landed
+        // mid-cycle, say. Rewriting the identical frame is a wasted round trip to
+        // the OS twice a second.
+        assert_eq!(
+            blink_repaint_target(
+                Some((IconState::Connecting, Appearance::Dark, Blink::Off)),
+                Blink::Off
+            ),
+            None,
+        );
+    }
+
+    #[test]
+    fn a_blink_sub_tick_before_any_icon_is_drawn_does_nothing() {
+        assert_eq!(blink_repaint_target(None, Blink::Off), None);
+    }
+
+    #[test]
+    fn the_blink_carries_the_appearance_already_on_screen() {
+        // The sub-tick deliberately does not re-read AppKit; it must reuse the
+        // appearance the last full tick resolved, or a blink on a light menu bar
+        // would flip to the dark-ink asset every half second.
+        assert_eq!(
+            blink_repaint_target(
+                Some((IconState::Connecting, Appearance::Light, Blink::On)),
+                Blink::Off
+            ),
+            Some((IconState::Connecting, Appearance::Light)),
+        );
+    }
+
+    #[test]
+    fn blink_flips_between_exactly_two_phases() {
+        assert_eq!(Blink::On.flipped(), Blink::Off);
+        assert_eq!(Blink::Off.flipped(), Blink::On);
+        // Two flips return to the start, so the cycle cannot drift into a phase
+        // with no asset behind it.
+        assert_eq!(Blink::On.flipped().flipped(), Blink::On);
+    }
+
+    #[test]
+    fn the_blink_interval_evenly_subdivides_the_poll_interval() {
+        // The poll loop sleeps `POLL_INTERVAL` in `BLINK_INTERVAL` slices. If the
+        // second does not divide the first, the final slice is short and the
+        // blink stutters once per status tick — visible, and exactly the kind of
+        // thing that gets blamed on the proxy rather than on the timer.
+        assert!(BLINK_INTERVAL <= POLL_INTERVAL);
+        assert_eq!(
+            POLL_INTERVAL.as_millis() % BLINK_INTERVAL.as_millis(),
+            0,
+            "blink interval must divide the poll interval evenly"
+        );
     }
 
     #[test]
