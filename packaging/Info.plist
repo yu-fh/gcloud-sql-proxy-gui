@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key>
+  <string>Cloud SQL Proxy</string>
+  <key>CFBundleDisplayName</key>
+  <string>Cloud SQL Proxy</string>
+  <key>CFBundleIdentifier</key>
+  <string>ai.firsthand.fh-cloud-sql-proxy-gui</string>
+  <key>CFBundleExecutable</key>
+  <string>fh-cloud-sql-proxy-gui</string>
+  <key>CFBundleIconFile</key>
+  <string>icon</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleShortVersionString</key>
+  <string>@VERSION@</string>
+  <key>CFBundleVersion</key>
+  <string>@VERSION@</string>
+  <!-- nsh itself requires macOS 14. -->
+  <key>LSMinimumSystemVersion</key>
+  <string>14.0</string>
+  <key>NSPrincipalClass</key>
+  <string>NSApplication</string>
+  <key>NSHighResolutionCapable</key>
+  <true/>
+  <!-- Declare this an agent app so it never appears in the Dock or the app
+       switcher. The app also sets the Accessory activation policy at startup,
+       but that runs after launch, so without this key the Dock icon appears
+       for a moment and then vanishes. Declaring it here means it is never
+       drawn. -->
+  <key>LSUIElement</key>
+  <true/>
+</dict>
+</plist>

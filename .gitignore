@@ -1,5 +1,6 @@
 .claude/worktrees/
 target/
+dist/
 .DS_Store
 .playwright-mcp/
 __pycache__/

@@ -4,8 +4,7 @@
 //! convention). A leaked child keeps holding those ports, so the next start
 //! fails with "address already in use" and the user has to hunt down a stray
 //! PID. Preventing that is the whole reason this module drives
-//! `tokio::process` directly instead of delegating to `tauri-plugin-shell`:
-//! it can set [`kill_on_drop`] and add an explicit [`Drop`] that signals every
+//! `tokio::process` directly instead of delegating to a shell plugin: it can set [`kill_on_drop`] and add an explicit [`Drop`] that signals every
 //! surviving child.
 //!
 //! [`kill_on_drop`]: tokio::process::Command::kill_on_drop

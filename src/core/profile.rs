@@ -2,7 +2,7 @@
 //! (dev/stg/prd) and the two Cloud SQL instances (primary + read replica)
 //! that its proxy process connects to.
 //!
-//! This module has no Tauri dependency and is unit-testable standalone.
+//! This module has no UI dependency and is unit-testable standalone.
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;

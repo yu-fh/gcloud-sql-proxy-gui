@@ -26,25 +26,23 @@
 //! recorded -- see [`Logger::system_info`], which runs `gcloud config
 //! get-value account` and never reads the ADC token next to it.
 //!
-//! # No Tauri, and no new dependency
+//! # No UI dependency, and no new crate
 //!
-//! `core::` must stay Tauri-free, and this module also adds no crate. The
+//! `core::` must stay free of any UI dependency, and this module also adds no
+//! crate. The
 //! timestamp is formatted from [`SystemTime`] by [`format_utc`] -- about thirty
 //! lines of civil-date arithmetic -- in preference to pulling `time` or
 //! `chrono` in:
 //!
-//! * `time` is already in the build graph (via `cookie` -> `tauri`) but only at
-//!   0.3.55, which needs rustc 1.88; declaring it as a direct dependency under
-//!   this crate's `rust-version = "1.77"` resolves it to 0.3.41 instead and so
-//!   puts *two* copies of `time` in the tree.
+//! * `time` would be a new dependency for about thirty lines of arithmetic.
 //! * The feature that would be wanted, `local-offset`, is documented as
 //!   returning `Err` on Unix unless the process is single-threaded. This app is
 //!   multi-threaded before the first record is written, so it would never
 //!   succeed anyway.
 //!
-//! Records therefore carry UTC with an explicit `Z`. The webview knows the
-//! user's timezone for free and renders local time from it, which is both
-//! correct and the only place a timezone is actually needed.
+//! Records therefore carry UTC with an explicit `Z`. The Logs view converts to
+//! the local timezone when it renders a row, which is the only place a timezone
+//! is actually needed.
 //!
 //! # Locking
 //!
@@ -118,7 +116,7 @@ pub enum Severity {
 
 impl Severity {
     /// The wire and on-disk spelling. Lowercase because it is also a CSS class
-    /// suffix and a filter value in the webview.
+    /// suffix and a filter value in the Logs view.
     pub fn as_str(self) -> &'static str {
         match self {
             Severity::Info => "info",

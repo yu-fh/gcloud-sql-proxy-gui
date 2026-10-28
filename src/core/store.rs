@@ -2,7 +2,7 @@
 //! initialising a fresh empty config, and load/save with validation and
 //! atomic writes.
 //!
-//! This module has no Tauri dependency and is unit-testable standalone.
+//! This module has no UI dependency and is unit-testable standalone.
 
 use std::path::{Path, PathBuf};
 
@@ -144,7 +144,7 @@ pub fn load_or_init(path: &Path) -> Result<ProfileConfig, StoreError> {
 /// The temp name carries the process id so two processes cannot interleave
 /// their writes into one temp file. That does NOT serialize concurrent saves
 /// within a process: callers must hold the config behind a mutex and save
-/// while holding the guard (Tauri commands run on a thread pool, so two IPC
+/// while holding the guard (the tray and the window run on a thread pool, so two
 /// calls can otherwise overlap).
 pub fn save(path: &Path, config: &ProfileConfig) -> Result<(), StoreError> {
     config.validate()?;

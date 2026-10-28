@@ -1,6 +1,6 @@
 //! Parse a pasted `cloud-sql-proxy` invocation back into a [`Profile`].
 //!
-//! This module has no Tauri dependency and is unit-testable standalone.
+//! This module has no UI dependency and is unit-testable standalone.
 //!
 //! # Why this exists
 //!
