@@ -55,6 +55,9 @@ pub struct Model {
     pub note: Signal<String>,
     pub banner: Signal<Option<Banner>>,
     pub logs: Signal<Option<LogsView>>,
+    /// Port fields whose text is not a valid port, as "profile id:instance index".
+    /// Their text never reaches `edit`, so Done is held back while any exist.
+    pub bad: Signal<Vec<String>>,
 }
 
 impl Model {
@@ -70,6 +73,7 @@ impl Model {
             note: signal(String::new()),
             banner: signal(None),
             logs: signal(None),
+            bad: signal(Vec::new()),
         }
     }
 
@@ -80,7 +84,14 @@ impl Model {
             self.edit
                 .set(data.profiles.iter().map(|v| v.profile.clone()).collect());
             self.dirty.set(false);
+            self.bad.set(Vec::new());
+            // An import that went through replaced the panel's purpose; one that
+            // failed never gets here, so the pasted text is still there to fix.
+            self.importing.set(false);
             self.epoch.update(|e| *e += 1);
+        }
+        if data.saved {
+            self.dirty.set(false);
         }
         if let Some(id) = data.select {
             self.selected.set(Some(id));
@@ -134,6 +145,7 @@ pub fn Settings() -> impl IntoElement {
         if section.get_untracked() != want {
             section.set(want);
         }
+        bridge::set_dirty(m.dirty.get_untracked());
         let version = bridge::version();
         if seen.get_untracked() != version {
             seen.set(version);

@@ -142,6 +142,21 @@ async fn start_reaches_running_after_ready_line() {
 }
 
 #[tokio::test]
+async fn a_child_is_in_the_live_pid_registry_exactly_while_it_runs() {
+    // The panic hook and the signal path find children through this registry
+    // when no manager can be reached, so it must track start and stop. The
+    // registry is process-wide and tests run in parallel, so this asserts on
+    // this child's own pid rather than on the whole set.
+    let mut m = manager("ready");
+    m.start(&test_profile("dev")).await.expect("start");
+    let pid = m.pid_of("dev").expect("a running child has a pid");
+    assert!(ProxyManager::live_pids().contains(&pid));
+
+    m.stop_all().await;
+    assert!(!ProxyManager::live_pids().contains(&pid));
+}
+
+#[tokio::test]
 async fn stop_transitions_to_stopped_and_clears_is_running() {
     let mut m = manager("ready");
     let p = test_profile("dev");

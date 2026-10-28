@@ -48,8 +48,7 @@ use crate::core::audit::Category;
 use crate::dialogs::{self, Kind};
 use crate::host::{on_main, runtime, state};
 use crate::tray_model::{
-    blink_repaint_target, icon_bytes, join_ports, snapshot, Appearance, Blink, Drawn, IconState,
-    Snapshot, BLINK_INTERVAL,
+    icon_bytes, join_ports, snapshot, Appearance, Blink, Drawn, IconState, Snapshot, BLINK_INTERVAL,
 };
 use crate::window::{self, Section};
 use crate::{autostart, service};
@@ -233,15 +232,6 @@ fn apply(snap: Snapshot, phase: Blink) {
         if tray.drawn == Some(wanted) {
             return;
         }
-        // A sub-tick in a phase that needs no repaint is the common case for a
-        // steady state: nothing to do.
-        if tray.drawn.is_some()
-            && tray.drawn.map(|d| (d.0, d.1)) == Some((icon_state, appearance))
-            && blink_repaint_target(tray.drawn, blink).is_none()
-        {
-            return;
-        }
-
         let mtm = tray.delegate.mtm();
         if draw_icon(tray, mtm, icon_state, appearance, blink) {
             let changed = tray

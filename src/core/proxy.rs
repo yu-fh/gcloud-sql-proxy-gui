@@ -17,6 +17,7 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use std::sync::Mutex as StdMutex;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
@@ -24,6 +25,43 @@ use tokio::sync::Mutex;
 use super::audit::{Category, Logger};
 use super::log_watcher::{self, Diagnosis, ProxyEvent};
 use super::profile::Profile;
+
+/// Pids of the live children, outside any manager.
+///
+/// A manager's `Drop` and `kill_on_drop` cannot run when the process aborts or
+/// is about to die on a panic (the release profile uses `panic = "abort"`), but
+/// a panic hook still can. This registry is what lets that hook find the
+/// children. Entries are removed when a child is stopped or reaped, so a pid is
+/// never signalled after the OS could have reused it. Keyed by pid rather than
+/// profile id: several managers can exist (the tests build many), and profile
+/// ids repeat across them.
+static LIVE_PIDS: StdMutex<Vec<u32>> = StdMutex::new(Vec::new());
+
+fn live_pids_lock() -> std::sync::MutexGuard<'static, Vec<u32>> {
+    // A poisoned lock only means another thread panicked mid-update; the map is
+    // still the best information there is, and cleanup must not itself panic.
+    LIVE_PIDS.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+fn register_pid(pid: u32) {
+    live_pids_lock().push(pid);
+}
+
+fn unregister_pid(pid: u32) {
+    live_pids_lock().retain(|p| *p != pid);
+}
+
+/// SIGKILL every live child now, synchronously, without touching any manager.
+/// For a panic hook or a signal path, where nothing async can be relied on.
+pub fn kill_live_children_now() {
+    for pid in live_pids_lock().iter() {
+        // SAFETY: `kill` takes a pid and a signal and touches no memory. The
+        // registry only holds pids of children that have not been reaped.
+        unsafe {
+            libc::kill(*pid as libc::pid_t, libc::SIGKILL);
+        }
+    }
+}
 
 /// How many log lines are retained before the oldest are dropped. A proxy left
 /// running all day would otherwise grow this buffer without bound.
@@ -82,6 +120,9 @@ pub struct ProxyManager {
     /// Defaults to a memory-only logger so `ProxyManager::new` keeps its
     /// one-argument shape and the integration tests need no logger of their own.
     audit: Logger,
+    /// The pid each live child was registered under in [`LIVE_PIDS`], so it can
+    /// be unregistered after the child has exited and no longer reports one.
+    child_pids: HashMap<String, u32>,
 }
 
 impl ProxyManager {
@@ -90,6 +131,7 @@ impl ProxyManager {
             binary: binary.into(),
             env: Vec::new(),
             children: HashMap::new(),
+            child_pids: HashMap::new(),
             statuses: Arc::new(Mutex::new(HashMap::new())),
             logs: Arc::new(Mutex::new(Vec::new())),
             log_cap: DEFAULT_LOG_CAP,
@@ -170,9 +212,11 @@ impl ProxyManager {
     /// where `try_wait` hands it over.
     fn reap_exited(&mut self) {
         let audit = &self.audit;
+        let mut exited: Vec<String> = Vec::new();
         self.children
             .retain(|profile_id, child| match child.try_wait() {
                 Ok(Some(status)) => {
+                    exited.push(profile_id.clone());
                     let described = match status.code() {
                         Some(0) => "exited cleanly (code 0)".to_string(),
                         Some(code) => format!("exited with code {code}"),
@@ -199,6 +243,21 @@ impl ProxyManager {
                 // child stays in the map.
                 _ => true,
             });
+        for profile_id in exited {
+            self.forget_pid(&profile_id);
+        }
+    }
+
+    /// Take a profile's child out of the process-wide pid registry.
+    fn forget_pid(&mut self, profile_id: &str) {
+        if let Some(pid) = self.child_pids.remove(profile_id) {
+            unregister_pid(pid);
+        }
+    }
+
+    /// Pids of every child currently registered, across all managers.
+    pub fn live_pids() -> Vec<u32> {
+        live_pids_lock().clone()
     }
 
     /// The OS pid of a running child, if any. Used by tests to assert against
@@ -264,6 +323,8 @@ impl ProxyManager {
         })?;
 
         if let Some(pid) = child.id() {
+            self.child_pids.insert(profile.id.clone(), pid);
+            register_pid(pid);
             self.audit.info(
                 Category::Event,
                 Some(&profile.id),
@@ -321,6 +382,9 @@ impl ProxyManager {
             let pid = child.id();
             // `kill` sends SIGKILL and awaits the child, so no zombie is left.
             let _ = child.kill().await;
+            // Only now is the pid free to be reused, so only now does it leave
+            // the registry.
+            self.forget_pid(profile_id);
             self.audit.info(
                 Category::Event,
                 Some(profile_id),
@@ -382,6 +446,9 @@ impl Drop for ProxyManager {
     fn drop(&mut self) {
         for child in self.children.values_mut() {
             let _ = child.start_kill();
+        }
+        for pid in self.child_pids.values() {
+            unregister_pid(*pid);
         }
     }
 }

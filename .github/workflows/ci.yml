@@ -8,7 +8,7 @@ on:
 
 concurrency:
   # One run per branch. A new push cancels the previous run rather than queueing
-  # behind it -- only the tip matters, and a Tauri build is not cheap.
+  # behind it -- only the tip matters, and a universal build is not cheap.
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
@@ -21,7 +21,7 @@ env:
 jobs:
   test:
     name: Test and lint
-    # macOS because the app links against AppKit and WebKit -- it does not
+    # macOS because the app links against AppKit -- it does not
     # compile anywhere else, so there is no cheaper runner to fall back to.
     runs-on: macos-14
     steps:

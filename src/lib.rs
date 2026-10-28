@@ -7,6 +7,7 @@ pub mod core;
 pub mod dialogs;
 pub mod host;
 pub mod service;
+pub mod shutdown;
 pub mod tray;
 pub mod tray_model;
 pub mod ui;

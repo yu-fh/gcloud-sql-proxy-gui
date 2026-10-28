@@ -1,7 +1,9 @@
 //! Process entry point: resolve the config and the proxy binary, build the
 //! shared state, put the tray up, and run the AppKit loop. Children are
-//! stopped in `applicationWillTerminate:` (see `tray::shut_down`), so no path
-//! out of the app leaves one behind.
+//! stopped in `applicationWillTerminate:` (see `tray::shut_down`), which a
+//! menu quit, Cmd+Q and logout all reach. Signals and panics are handled in
+//! `shutdown`. Only SIGKILL of the app itself, or a crash that skips the panic
+//! hook, can leave a child behind.
 
 use std::path::{Path, PathBuf};
 
@@ -10,7 +12,7 @@ use fh_cloud_sql_proxy_gui::core::audit::{Category, Logger, SystemInfoInputs};
 use fh_cloud_sql_proxy_gui::core::profile::ProfileConfig;
 use fh_cloud_sql_proxy_gui::core::proxy::ProxyManager;
 use fh_cloud_sql_proxy_gui::core::store;
-use fh_cloud_sql_proxy_gui::{dialogs, host, tray, window};
+use fh_cloud_sql_proxy_gui::{dialogs, host, shutdown, tray, window};
 use objc2::MainThreadMarker;
 use objc2_app_kit::NSApplication;
 
@@ -72,6 +74,7 @@ fn main() {
         .build()
         .expect("tokio runtime");
     host::init(runtime, shared);
+    shutdown::install();
 
     window::install_main_menu(mtm);
     tray::install(mtm);

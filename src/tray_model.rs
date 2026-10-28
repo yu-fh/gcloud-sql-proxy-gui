@@ -274,21 +274,6 @@ pub fn icon_bytes(state: IconState, appearance: Appearance, blink: Blink) -> &'s
 /// What is currently drawn on the status item.
 pub type Drawn = (IconState, Appearance, Blink);
 
-/// What, if anything, a blink sub-tick should repaint.
-///
-/// Only a `Connecting` icon animates, and only when the phase on screen is not
-/// already the requested one. `None` means leave the icon alone.
-pub fn blink_repaint_target(
-    last_drawn: Option<Drawn>,
-    blink: Blink,
-) -> Option<(IconState, Appearance)> {
-    let (state, appearance, drawn_phase) = last_drawn?;
-    if state != IconState::Connecting || drawn_phase == blink {
-        return None;
-    }
-    Some((state, appearance))
-}
-
 /// The identity of the profile set a menu was built from: the ids, in order.
 pub fn profile_ids(snapshot: &Snapshot) -> Vec<String> {
     snapshot.rows.iter().map(|row| row.id.clone()).collect()
@@ -520,42 +505,6 @@ mod tests {
     #[test]
     fn the_blink_interval_evenly_subdivides_the_poll_interval() {
         assert_eq!(POLL_INTERVAL.as_millis() % BLINK_INTERVAL.as_millis(), 0);
-    }
-
-    #[test]
-    fn only_a_connecting_icon_repaints_on_a_blink_sub_tick() {
-        let drawn = |s| Some((s, Appearance::Dark, Blink::On));
-        assert_eq!(
-            blink_repaint_target(drawn(IconState::Connecting), Blink::Off),
-            Some((IconState::Connecting, Appearance::Dark))
-        );
-        for state in [
-            IconState::Disconnected,
-            IconState::Connected,
-            IconState::Error,
-        ] {
-            assert_eq!(blink_repaint_target(drawn(state), Blink::Off), None);
-        }
-    }
-
-    #[test]
-    fn a_blink_in_the_phase_already_drawn_is_not_repainted() {
-        let drawn = Some((IconState::Connecting, Appearance::Dark, Blink::On));
-        assert_eq!(blink_repaint_target(drawn, Blink::On), None);
-    }
-
-    #[test]
-    fn a_blink_before_any_icon_is_drawn_does_nothing() {
-        assert_eq!(blink_repaint_target(None, Blink::Off), None);
-    }
-
-    #[test]
-    fn the_blink_carries_the_appearance_already_on_screen() {
-        let drawn = Some((IconState::Connecting, Appearance::Light, Blink::On));
-        assert_eq!(
-            blink_repaint_target(drawn, Blink::Off),
-            Some((IconState::Connecting, Appearance::Light))
-        );
     }
 
     #[test]

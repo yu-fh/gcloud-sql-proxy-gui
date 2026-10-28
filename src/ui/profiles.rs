@@ -63,11 +63,27 @@ fn edit(m: Model, id: &str, f: impl FnOnce(&mut Profile)) {
     m.dirty.set(true);
 }
 
+/// A port as typed: a number from 1 to 65535, else nothing.
+pub fn parse_port(text: &str) -> Option<u16> {
+    text.trim().parse::<u16>().ok().filter(|p| *p > 0)
+}
+
 fn field_row(
     label: &'static str,
     value: String,
     placeholder: &'static str,
     on_change: impl Fn(String) + 'static,
+) -> impl IntoElement {
+    field_row_checked(label, value, placeholder, on_change, || false)
+}
+
+/// A field row that outlines itself in red while `invalid` holds.
+fn field_row_checked(
+    label: &'static str,
+    value: String,
+    placeholder: &'static str,
+    on_change: impl Fn(String) + 'static,
+    invalid: impl Fn() -> bool + 'static,
 ) -> impl IntoElement {
     row()
         .child(
@@ -85,6 +101,14 @@ fn field_row(
                 .px(px(8.0))
                 .h(px(28.0))
                 .rounded(px(6.0))
+                .border_1()
+                .border_color(move || {
+                    if invalid() {
+                        theme::ERROR
+                    } else {
+                        theme::FIELD
+                    }
+                })
                 .bg(theme::FIELD)
                 .text_size(px(13.0))
                 .text_color(theme::TEXT),
@@ -227,16 +251,38 @@ fn detail(m: Model, id: String) -> impl IntoElement {
                     move |v| edit(m, &id, |p| p.instances[index].connection_name = v)
                 },
             ))
-            .child(field_row("Port", instance.port.to_string(), "", {
-                let id = id_for(&id);
-                // A port that is not a number is not saved: the field keeps
-                // what was typed and validation reports it on Save.
-                move |v| {
-                    if let Ok(port) = v.trim().parse::<u16>() {
-                        edit(m, &id, |p| p.instances[index].port = port);
+            .child(field_row_checked(
+                "Port",
+                instance.port.to_string(),
+                "",
+                {
+                    let id = id_for(&id);
+                    let key = format!("{id}:{index}");
+                    // Only a valid port reaches the editor's copy. Anything else
+                    // is flagged instead, which turns the field red and holds
+                    // Done back: applying the last keystroke that happened to
+                    // parse would save a port the user never typed (`1543x`
+                    // would save 1543).
+                    move |v| match parse_port(&v) {
+                        Some(port) => {
+                            m.bad.update(|bad| bad.retain(|k| k != &key));
+                            edit(m, &id, |p| p.instances[index].port = port);
+                        }
+                        None => {
+                            m.bad.update(|bad| {
+                                if !bad.contains(&key) {
+                                    bad.push(key.clone());
+                                }
+                            });
+                            m.dirty.set(true);
+                        }
                     }
-                }
-            }));
+                },
+                {
+                    let key = format!("{id}:{index}");
+                    move || m.bad.get().contains(&key)
+                },
+            ));
     }
 
     let options = group()
@@ -383,8 +429,13 @@ fn import_panel(m: Model) -> impl IntoElement {
                         bridge::fail_input("Could not import", "Paste a cloud-sql-proxy command first.");
                         return;
                     }
-                    m.importing.set(false);
-                    bridge::import(c.trim().to_string());
+                    // The panel stays open until the import lands: a failed one
+                    // leaves the pasted text there to fix. A successful one
+                    // closes it when the new profile loads.
+                    let command = c.trim().to_string();
+                    bridge::guarded(m.dirty.get_untracked(), "Importing", move || {
+                        bridge::import(command)
+                    });
                 })),
         )
 }
@@ -459,13 +510,16 @@ pub fn profiles_section(m: Model) -> impl IntoElement {
         let Some(id) = m.selected.get_untracked() else {
             return;
         };
+        let dirty = m.dirty.get_untracked();
         if let Some(view) = m
             .live
             .get_untracked()
             .into_iter()
             .find(|v| v.profile.id == id)
         {
-            bridge::delete(view);
+            bridge::guarded(dirty, "Deleting an environment", move || {
+                bridge::delete(view)
+            });
         }
     };
 
@@ -533,7 +587,9 @@ pub fn profiles_section(m: Model) -> impl IntoElement {
                 .py(px(10.0))
                 .child(
                     text(move || {
-                        if m.dirty.get() {
+                        if !m.bad.get().is_empty() {
+                            "A port must be a number from 1 to 65535.".to_string()
+                        } else if m.dirty.get() {
                             "Unsaved changes".to_string()
                         } else {
                             m.note.get()
@@ -546,11 +602,15 @@ pub fn profiles_section(m: Model) -> impl IntoElement {
                 .child(button(
                     "Reload",
                     || true,
-                    move || bridge::load_profiles(true, None),
+                    move || {
+                        bridge::guarded(m.dirty.get_untracked(), "Reloading", || {
+                            bridge::load_profiles(true, None)
+                        })
+                    },
                 ))
                 .child(button(
                     "Done",
-                    move || m.dirty.get(),
+                    move || m.dirty.get() && m.bad.get().is_empty(),
                     move || bridge::save(m.edit.get_untracked()),
                 )),
         )
@@ -582,6 +642,19 @@ mod tests {
         assert_eq!(optional(""), None);
         assert_eq!(optional("   "), None);
         assert_eq!(optional("pg.dev"), Some("pg.dev".to_string()));
+    }
+
+    #[test]
+    fn only_a_whole_port_number_is_accepted() {
+        assert_eq!(parse_port("15432"), Some(15432));
+        assert_eq!(parse_port(" 5432 "), Some(5432));
+        assert_eq!(parse_port("65535"), Some(65535));
+        // The cases a keystroke-by-keystroke parse used to turn into another port.
+        assert_eq!(parse_port("70000"), None);
+        assert_eq!(parse_port("1543x"), None);
+        assert_eq!(parse_port(""), None);
+        assert_eq!(parse_port("0"), None);
+        assert_eq!(parse_port("-1"), None);
     }
 
     #[test]

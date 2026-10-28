@@ -1,7 +1,7 @@
 //! Runs service calls on the tokio runtime and hands their results to the nsh
 //! thread. See the module docs on [`crate::ui`].
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 
 use crate::core::audit::Category;
@@ -26,6 +26,8 @@ struct Inner {
     logs: Option<LogsView>,
     banner: Option<Banner>,
     note: String,
+    /// A save went through: the editor's copy is what is on disk now.
+    saved: bool,
 }
 
 static INNER: Mutex<Inner> = Mutex::new(Inner {
@@ -36,7 +38,32 @@ static INNER: Mutex<Inner> = Mutex::new(Inner {
     logs: None,
     banner: None,
     note: String::new(),
+    saved: false,
 });
+
+/// Whether the editor holds unsaved changes. Mirrored from the nsh signal so
+/// the window's close handler, which is on the main thread, can read it.
+static DIRTY: AtomicBool = AtomicBool::new(false);
+
+pub fn set_dirty(dirty: bool) {
+    DIRTY.store(dirty, Ordering::Release);
+}
+
+pub fn is_dirty() -> bool {
+    DIRTY.load(Ordering::Acquire)
+}
+
+/// Forget the previous window's banner and note, so a reopened window does not
+/// start by showing an old error or "Saved.".
+pub fn reset_session() {
+    write(|i| {
+        i.banner = None;
+        i.note.clear();
+        i.ignored_flags.clear();
+        i.saved = false;
+    });
+    set_dirty(false);
+}
 /// Bumped on every write; a component re-reads when it changes.
 static VERSION: AtomicU64 = AtomicU64::new(0);
 
@@ -59,9 +86,11 @@ pub struct Data {
     pub logs: Option<LogsView>,
     pub banner: Option<Banner>,
     pub note: String,
+    pub saved: bool,
 }
 
-/// The current data. Consumes the one-shot flags (`reset_edits`, `select`).
+/// The current data. Consumes the one-shot flags (`reset_edits`, `select`,
+/// `saved`).
 pub fn take() -> Data {
     let mut inner = INNER.lock().unwrap_or_else(|e| e.into_inner());
     let data = Data {
@@ -72,8 +101,10 @@ pub fn take() -> Data {
         logs: inner.logs.clone(),
         banner: inner.banner.clone(),
         note: inner.note.clone(),
+        saved: inner.saved,
     };
     inner.reset_edits = false;
+    inner.saved = false;
     data
 }
 
@@ -145,8 +176,13 @@ pub fn save(profiles: Vec<crate::core::profile::Profile>) {
     runtime().spawn(async move {
         match service::save_profiles(state(), profiles).await {
             Ok(()) => {
-                write(|i| i.note = "Saved.".to_string());
-                load_profiles(true, None);
+                // The editor already holds what was saved, so it is left alone:
+                // replacing it would rebuild the pane under the user's cursor.
+                write(|i| {
+                    i.note = "Saved.".to_string();
+                    i.saved = true;
+                });
+                refresh_status();
             }
             Err(e) => fail("Could not save profiles", e),
         }
@@ -226,6 +262,16 @@ pub fn delete(view: ProfileView) {
                 load_profiles(true, None);
             }
             Err(e) => fail("Could not delete the environment", e),
+        }
+    });
+}
+
+/// Run `then` now, or after the user agrees to discard unsaved edits when
+/// `dirty`. Every action that replaces the editor's copy goes through this.
+pub fn guarded(dirty: bool, action: &'static str, then: impl FnOnce() + Send + 'static) {
+    runtime().spawn(async move {
+        if !dirty || confirm_discard(action).await {
+            then();
         }
     });
 }

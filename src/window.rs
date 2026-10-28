@@ -14,7 +14,7 @@ use std::rc::Rc;
 
 use nsh_platform_macos as platform;
 use objc2::rc::Retained;
-use objc2::runtime::ProtocolObject;
+use objc2::runtime::{Bool, ProtocolObject};
 use objc2::{define_class, msg_send, sel, MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
     NSApplication, NSBackingStoreType, NSMenu, NSMenuItem, NSWindow, NSWindowDelegate,
@@ -57,6 +57,24 @@ define_class!(
     unsafe impl NSObjectProtocol for WindowDelegate {}
 
     unsafe impl NSWindowDelegate for WindowDelegate {
+        /// Closing drops the editor's copy, so unsaved edits are asked about
+        /// first. This runs from AppKit's event handling, not a GCD block, so
+        /// the modal does not starve the main queue.
+        #[unsafe(method(windowShouldClose:))]
+        fn window_should_close(&self, _sender: &NSWindow) -> Bool {
+            if !ui::is_dirty() {
+                return Bool::YES;
+            }
+            Bool::new(crate::dialogs::run_modal(
+                self.mtm(),
+                "Discard your unsaved changes?",
+                "Closing the window will lose the changes you have not saved.",
+                crate::dialogs::Kind::Warning,
+                "Discard",
+                Some("Keep Editing"),
+            ))
+        }
+
         #[unsafe(method(windowWillClose:))]
         fn window_will_close(&self, _n: &NSNotification) {
             // Take the state out first: closing re-enters this delegate.
@@ -90,6 +108,8 @@ pub fn open(section: Section) {
     if let Some(window) = already {
         window.makeKeyAndOrderFront(None);
     } else {
+        // A new window starts clean: no banner or note from the last one.
+        ui::reset_session();
         let (w, h) = WINDOW_SIZE;
         let rect = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(w as f64, h as f64));
         let style = NSWindowStyleMask::Titled
@@ -174,8 +194,18 @@ fn submenu(
 /// still route.
 pub fn install_main_menu(mtm: MainThreadMarker) {
     let bar = NSMenu::new(mtm);
-    // The first menu is the application menu by convention; it is left empty.
-    bar.addItem(&submenu(mtm, "", &[]));
+    // The first menu is the application menu by convention. Cmd+Q lives here, so
+    // it quits from the settings window too, not only while the tray menu is open.
+    bar.addItem(&submenu(
+        mtm,
+        "",
+        &[item(
+            mtm,
+            "Quit Cloud SQL Proxy",
+            sel!(terminate:),
+            ns_string!("q"),
+        )],
+    ));
     bar.addItem(&submenu(
         mtm,
         "Edit",

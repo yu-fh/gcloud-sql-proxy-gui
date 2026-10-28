@@ -12,4 +12,5 @@ mod profiles;
 mod root;
 mod theme;
 
+pub use bridge::{is_dirty, reset_session};
 pub use root::{request_section, Settings};

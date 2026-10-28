@@ -211,8 +211,11 @@ async fn a_stop_records_the_kill_and_the_child_exit() {
 
     manager.stop("dev").await;
 
-    let contents = poll_file(&path, "the kill record", |text| {
-        text.contains("killed child pid")
+    // `stop` writes the kill record and then the status transition, and the
+    // file is written by a separate thread. Waiting for the first alone raced
+    // the second, so wait for both.
+    let contents = poll_file(&path, "the kill and stop records", |text| {
+        text.contains("killed child pid") && text.contains("status: Running -> Stopped")
     });
     assert!(
         contents.contains("status: Running -> Stopped"),
