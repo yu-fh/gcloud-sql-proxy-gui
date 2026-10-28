@@ -9,4 +9,5 @@ pub mod host;
 pub mod service;
 pub mod tray;
 pub mod tray_model;
+pub mod ui;
 pub mod window;

@@ -15,12 +15,8 @@ use crate::app_state::SharedState;
 
 /// A profile plus its live status, as the UI renders it.
 ///
-/// `profile` is flattened, so the JSON is the profile's own camelCase shape
-/// with `status`/`detail`/`fixCommand` alongside it rather than nested.
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ProfileView {
-    #[serde(flatten)]
     pub profile: Profile,
     /// "stopped" | "starting" | "running" | "failed"
     pub status: String,
@@ -33,8 +29,7 @@ pub struct ProfileView {
 }
 
 /// What starting a profile would entail, for the caller to confirm.
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq)]
 pub struct StartPlanView {
     /// Profiles that share a port and would be stopped first.
     pub stop_first: Vec<String>,
@@ -286,10 +281,8 @@ pub async fn add_profile(state: &SharedState, name: String) -> Result<Profile, S
 }
 
 /// A newly imported profile, plus what the import could not carry across.
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ImportView {
-    #[serde(flatten)]
     pub profile: Profile,
     /// Flags from the pasted command this app has no field for, already
     /// redacted where a value could be a credential. Empty means the profile
@@ -555,8 +548,7 @@ pub async fn stop_profile(state: &SharedState, id: String) -> Result<(), String>
 /// shows from `at` using the local timezone, while `atDisplay` is what the user
 /// would grep for if they opened the file, so the two must be able to be
 /// matched up.
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq)]
 pub struct LogRecordView {
     pub at: u64,
     pub at_display: String,
@@ -585,8 +577,7 @@ impl From<Record> for LogRecordView {
 
 /// What the Logs view needs in one round trip: the records, and where the file
 /// they are also written to lives.
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq)]
 pub struct LogsView {
     pub records: Vec<LogRecordView>,
     /// The audit log's path, for the "reveal in Finder" action and for the
@@ -861,57 +852,5 @@ mod tests {
         // Not case-insensitive by design: the only caller is the app's own
         // <select>, whose values are these three literals.
         assert_eq!(parse_severity(Some("ERROR")), None);
-    }
-
-    // --- the wire shape ----------------------------------------------------
-
-    #[test]
-    fn a_log_record_serializes_with_camel_case_field_names() {
-        // Verified empirically elsewhere in this app: snake_case is rejected by
-        // the frontend's field access, silently dropping the value.
-        let view = LogRecordView::from(Record {
-            at_ms: 0,
-            severity: Severity::Error,
-            category: crate::core::audit::Category::Event,
-            profile_id: Some("dev".to_string()),
-            message: "boom".to_string(),
-        });
-        let json = serde_json::to_value(&view).expect("serializes");
-        assert!(json.get("atDisplay").is_some(), "{json}");
-        assert!(json.get("profileId").is_some(), "{json}");
-        assert!(json.get("at_display").is_none(), "{json}");
-        assert!(json.get("profile_id").is_none(), "{json}");
-        assert_eq!(json["severity"], "error");
-        assert_eq!(json["category"], "event");
-        assert_eq!(json["atDisplay"], "1970-01-01T00:00:00.000Z");
-    }
-
-    #[test]
-    fn a_record_with_no_profile_serializes_profile_id_as_null() {
-        // The view distinguishes "not about a profile" from "about a profile",
-        // so the field has to be present and null rather than absent.
-        let view = LogRecordView::from(Record {
-            at_ms: 0,
-            severity: Severity::Info,
-            category: crate::core::audit::Category::System,
-            profile_id: None,
-            message: "app version: 0.1.0".to_string(),
-        });
-        let json = serde_json::to_value(&view).expect("serializes");
-        assert!(json["profileId"].is_null(), "{json}");
-    }
-
-    #[test]
-    fn the_logs_view_wrapper_serializes_camel_case_too() {
-        let view = LogsView {
-            records: Vec::new(),
-            file_path: Some("/tmp/audit.log".to_string()),
-            write_failures: 3,
-        };
-        let json = serde_json::to_value(&view).expect("serializes");
-        assert_eq!(json["filePath"], "/tmp/audit.log");
-        assert_eq!(json["writeFailures"], 3);
-        assert!(json.get("file_path").is_none(), "{json}");
-        assert!(json.get("write_failures").is_none(), "{json}");
     }
 }

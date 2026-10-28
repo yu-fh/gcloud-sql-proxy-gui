@@ -319,6 +319,7 @@ version = "0.1.3"
 dependencies = [
  "dirs",
  "dispatch2",
+ "libc",
  "nsh-base",
  "nsh-core",
  "nsh-platform-macos",

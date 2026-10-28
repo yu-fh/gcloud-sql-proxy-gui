@@ -10,7 +10,7 @@ use fh_cloud_sql_proxy_gui::core::audit::{Category, Logger, SystemInfoInputs};
 use fh_cloud_sql_proxy_gui::core::profile::ProfileConfig;
 use fh_cloud_sql_proxy_gui::core::proxy::ProxyManager;
 use fh_cloud_sql_proxy_gui::core::store;
-use fh_cloud_sql_proxy_gui::{dialogs, host, tray};
+use fh_cloud_sql_proxy_gui::{dialogs, host, tray, window};
 use objc2::MainThreadMarker;
 use objc2_app_kit::NSApplication;
 
@@ -73,7 +73,16 @@ fn main() {
         .expect("tokio runtime");
     host::init(runtime, shared);
 
+    window::install_main_menu(mtm);
     tray::install(mtm);
+
+    // Verification hook: open the settings window at launch, as a tray click
+    // would, so the window can be checked without driving the menu.
+    match std::env::var("FH_OPEN_WINDOW").as_deref() {
+        Ok("logs") => window::open(window::Section::Logs),
+        Ok(_) => window::open(window::Section::Profiles),
+        Err(_) => {}
+    }
 
     if let Some(message) = &load_error {
         // stderr for the operator, and a dialog for the user: with no Dock icon
