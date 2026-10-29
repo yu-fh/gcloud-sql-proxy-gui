@@ -1,4 +1,5 @@
-//! The Profiles section: the environment list on the left, the selected
+//! The Profiles section: the environment list, and a separate page to edit one.
+//! (was: the environment list on the left, the selected
 //! environment's settings on the right, and the add / import / delete / save
 //! actions.
 //!
@@ -442,9 +443,8 @@ fn import_panel(m: Model) -> impl IntoElement {
         )
 }
 
+/// One environment in the list: status dot, name, ports, and its two actions.
 fn list_row(m: Model, id: String) -> impl IntoElement {
-    let for_press = id.clone();
-    let id_sel = id.clone();
     let name = {
         let id = id.clone();
         move || {
@@ -478,9 +478,36 @@ fn list_row(m: Model, id: String) -> impl IntoElement {
                 .unwrap_or_default()
         }
     };
+    let ports = {
+        let id = id.clone();
+        move || {
+            m.live
+                .get()
+                .iter()
+                .find(|v| v.profile.id == id)
+                .map(|v| {
+                    v.profile
+                        .instances
+                        .iter()
+                        .map(|i| i.port.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                })
+                .unwrap_or_default()
+        }
+    };
     let for_label = raw_status.clone();
     let for_dot = raw_status.clone();
-    let status = move || status_label(&for_label()).to_string();
+    let for_sub = raw_status.clone();
+    let sub = move || {
+        let status = status_label(&for_sub()).to_string();
+        let ports = ports();
+        if ports.is_empty() {
+            status
+        } else {
+            format!("{status} · port {ports}")
+        }
+    };
     let dot = move || match for_dot().as_str() {
         "running" => theme::OK,
         "starting" => theme::WARN,
@@ -488,125 +515,141 @@ fn list_row(m: Model, id: String) -> impl IntoElement {
         _ => theme::BORDER,
     };
     let toggle_label = move || {
-        match raw_status().as_str() {
+        match for_label().as_str() {
             "running" | "starting" => "Stop",
             _ => "Start",
         }
         .to_string()
     };
     let for_toggle = id.clone();
-    theme::selectable(theme::WINDOW, move || {
-        m.selected.get().as_deref() == Some(id_sel.as_str())
-    })
-    .flex_row()
-    .items_center()
-    .gap_2()
-    .px(px(10.0))
-    .py(px(6.0))
-    .rounded(px(6.0))
-    .on_press(move || {
-        m.importing.set(false);
-        m.selected.set(Some(for_press.clone()));
-    })
-    .child(view().w(px(8.0)).h(px(8.0)).rounded(px(4.0)).bg(dot))
-    .child(
-        view()
-            .flex_1()
-            .child(text(name).text_size(px(13.0)).text_color(theme::TEXT))
-            .child(text(status).text_size(px(11.0)).text_color(theme::MUTED)),
-    )
-    .child(theme::button(
-        toggle_label,
-        || true,
-        move || {
-            runtime().spawn(crate::tray::toggle_profile(for_toggle.clone()));
-        },
-    ))
+    let for_edit = id.clone();
+    row()
+        .child(view().w(px(8.0)).h(px(8.0)).rounded(px(4.0)).bg(dot))
+        .child(
+            view()
+                .flex_1()
+                .py(px(6.0))
+                .child(text(name).text_size(px(13.0)).text_color(theme::TEXT))
+                .child(text(sub).text_size(px(11.0)).text_color(theme::MUTED)),
+        )
+        .child(button(
+            "Edit",
+            || true,
+            move || m.editing.set(Some(for_edit.clone())),
+        ))
+        .child(button(
+            toggle_label,
+            || true,
+            move || {
+                runtime().spawn(crate::tray::toggle_profile(for_toggle.clone()));
+            },
+        ))
 }
 
-pub fn profiles_section(m: Model) -> impl IntoElement {
+fn list_page(m: Model) -> View {
     let ids = move || m.edit.get().into_iter().map(|p| p.id).collect::<Vec<_>>();
-
     let add = move || {
-        let dirty = m.dirty.get_untracked();
-        runtime().spawn(async move {
-            if !dirty || bridge::confirm_discard("Adding an environment").await {
-                bridge::add();
-            }
-        });
+        bridge::add();
     };
-    let delete = move || {
-        let Some(id) = m.selected.get_untracked() else {
-            return;
-        };
-        let dirty = m.dirty.get_untracked();
-        if let Some(view) = m
-            .live
-            .get_untracked()
-            .into_iter()
-            .find(|v| v.profile.id == id)
-        {
-            bridge::guarded(dirty, "Deleting an environment", move || {
-                bridge::delete(view)
-            });
-        }
-    };
-
-    let sidebar = view()
-        .w(px(240.0))
-        .p(px(10.0))
-        .gap_1()
+    let list = view()
+        .flex_1()
+        .p(px(16.0))
         .child(
             text("Environments")
                 .text_size(px(11.0))
-                .text_color(theme::MUTED),
+                .text_color(theme::MUTED)
+                .mb(px(6.0)),
         )
-        .child(each(
+        .child(group().child(each(
             ids,
             |id: &String| id.clone(),
             move |id, _| list_row(m, id.with_untracked(|i| i.clone())),
-        ))
-        .child(view().flex_1())
+        )));
+
+    view().flex_1().child(scroll().flex_1().child(list)).child(
+        view()
+            .flex_row()
+            .items_center()
+            .gap_2()
+            .px(px(16.0))
+            .py(px(10.0))
+            .child(button("Add", || true, add))
+            .child(button(
+                "Import…",
+                || true,
+                move || {
+                    m.ignored.set(Vec::new());
+                    bridge::clear_ignored_flags();
+                    m.importing.set(true);
+                },
+            ))
+            .child(view().flex_1())
+            .child(
+                text(move || m.note.get())
+                    .text_size(px(12.0))
+                    .text_color(theme::MUTED),
+            )
+            .child(button(
+                "Reload",
+                || true,
+                || bridge::load_profiles(true, None),
+            )),
+    )
+}
+
+/// The edit page for one profile: the form, with Delete / Cancel / Save below.
+fn edit_page(m: Model, id: String) -> View {
+    let delete = {
+        let id = id.clone();
+        move || {
+            if let Some(view) = m
+                .live
+                .get_untracked()
+                .into_iter()
+                .find(|v| v.profile.id == id)
+            {
+                bridge::guarded(
+                    m.dirty.get_untracked(),
+                    "Deleting an environment",
+                    move || bridge::delete(view),
+                );
+            }
+        }
+    };
+    let title = {
+        let id = id.clone();
+        move || {
+            m.edit
+                .get()
+                .iter()
+                .find(|p| p.id == id)
+                .map(|p| {
+                    if p.name.is_empty() {
+                        p.id.clone()
+                    } else {
+                        p.name.clone()
+                    }
+                })
+                .unwrap_or_default()
+        }
+    };
+    let form = id.clone();
+    view()
+        .flex_1()
         .child(
             view()
                 .flex_row()
+                .items_center()
                 .gap_2()
-                .child(button("+", move || !m.importing.get(), add))
-                .child(button(
-                    "−",
-                    move || !m.importing.get() && m.selected.get().is_some(),
-                    delete,
-                ))
-                .child(button(
-                    "Import…",
-                    move || !m.importing.get(),
-                    move || {
-                        m.ignored.set(Vec::new());
-                        bridge::clear_ignored_flags();
-                        m.importing.set(true);
-                    },
-                )),
-        );
-
-    let pane = scroll().flex_1().child(view().p(px(16.0)).child(
-        when(move || m.importing.get(), move || import_panel(m)).otherwise(move || {
-            each(
-                move || {
-                    m.selected
-                        .get()
-                        .map(|id| (id, m.epoch.get()))
-                        .into_iter()
-                        .collect::<Vec<_>>()
-                },
-                |k: &(String, u64)| k.clone(),
-                move |k, _| detail(m, k.with_untracked(|k| k.0.clone())),
-            )
-        }),
-    ));
-
-    view()
-        .flex_1()
-        .child(view().flex_1().flex_row().child(sidebar).child(pane))
+                .px(px(16.0))
+                .pt(px(12.0))
+                .child(text(title).text_size(px(15.0)).text_color(theme::TEXT)),
+        )
+        .child(scroll().flex_1().child(view().p(px(16.0)).child(each(
+            move || vec![(form.clone(), m.epoch.get())],
+            |k: &(String, u64)| k.clone(),
+            move |k, _| detail(m, k.with_untracked(|k| k.0.clone())),
+        ))))
         .child(
             view()
                 .flex_row()
@@ -614,6 +657,8 @@ pub fn profiles_section(m: Model) -> impl IntoElement {
                 .gap_2()
                 .px(px(16.0))
                 .py(px(10.0))
+                .child(button("Delete", || true, delete))
+                .child(view().flex_1())
                 .child(
                     text(move || {
                         if !m.bad.get().is_empty() {
@@ -627,12 +672,11 @@ pub fn profiles_section(m: Model) -> impl IntoElement {
                     .text_size(px(12.0))
                     .text_color(theme::MUTED),
                 )
-                .child(view().flex_1())
                 .child(button(
-                    "Reload",
+                    "Cancel",
                     || true,
                     move || {
-                        bridge::guarded(m.dirty.get_untracked(), "Reloading", || {
+                        bridge::guarded(m.dirty.get_untracked(), "Cancelling", || {
                             bridge::load_profiles(true, None)
                         })
                     },
@@ -643,6 +687,27 @@ pub fn profiles_section(m: Model) -> impl IntoElement {
                     move || bridge::save(m.edit.get_untracked()),
                 )),
         )
+}
+
+pub fn profiles_section(m: Model) -> impl IntoElement {
+    when(
+        move || m.importing.get(),
+        move || {
+            scroll()
+                .flex_1()
+                .child(view().p(px(16.0)).child(import_panel(m)))
+        },
+    )
+    .otherwise(move || {
+        each(
+            move || vec![m.editing.get()],
+            |k: &Option<String>| k.clone(),
+            move |k, _| match k.with_untracked(|k| k.clone()) {
+                Some(id) => edit_page(m, id),
+                None => list_page(m),
+            },
+        )
+    })
 }
 
 #[allow(dead_code)]
