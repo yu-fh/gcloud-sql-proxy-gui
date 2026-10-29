@@ -199,12 +199,15 @@ pub fn install_main_menu(mtm: MainThreadMarker) {
     bar.addItem(&submenu(
         mtm,
         "",
-        &[item(
-            mtm,
-            "Quit Cloud SQL Proxy",
-            sel!(terminate:),
-            ns_string!("q"),
-        )],
+        &[
+            item(mtm, "Settings…", sel!(openProfiles:), ns_string!(",")),
+            item(
+                mtm,
+                "Quit Cloud SQL Proxy",
+                sel!(terminate:),
+                ns_string!("q"),
+            ),
+        ],
     ));
     bar.addItem(&submenu(
         mtm,

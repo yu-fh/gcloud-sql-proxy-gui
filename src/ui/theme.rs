@@ -23,6 +23,7 @@ pub const ROW_HOVER: AdaptiveColor = AdaptiveColor::rgb(0xe6e6ea, 0x363638);
 pub const ACCENT_HOVER: AdaptiveColor = AdaptiveColor::rgb(0x2a73ff, 0x5aa8ff);
 pub const ACCENT_PRESSED: AdaptiveColor = AdaptiveColor::rgb(0x0849c4, 0x2f86e6);
 pub const ON_ACCENT: AdaptiveColor = AdaptiveColor::rgb(0xffffff, 0x0b0b0c);
+pub const OK: AdaptiveColor = AdaptiveColor::rgb(0x1a7f37, 0x30d158);
 pub const ERROR_BG: AdaptiveColor = AdaptiveColor::rgb(0xffe5e8, 0x4a1d22);
 
 /// A small bordered push button. Hover, press and keyboard focus each show;

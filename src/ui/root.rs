@@ -133,6 +133,18 @@ pub fn Settings() -> impl IntoElement {
 
     bridge::load_profiles(true, None);
 
+    // The same gate as the Save button: nothing to save, or a port still wrong.
+    on_key("mod+s", move |_| {
+        if m.dirty.get_untracked() && m.bad.get_untracked().is_empty() {
+            bridge::save(m.edit.get_untracked());
+        }
+    });
+    on_key("escape", move |_| {
+        if m.importing.get_untracked() {
+            m.importing.set(false);
+        }
+    });
+
     set_interval(POLL, move || {
         let want = requested();
         if section.get_untracked() != want {

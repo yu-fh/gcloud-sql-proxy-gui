@@ -467,20 +467,40 @@ fn list_row(m: Model, id: String) -> impl IntoElement {
                 .unwrap_or_default()
         }
     };
-    let status = {
+    let raw_status = {
         let id = id.clone();
         move || {
             m.live
                 .get()
                 .iter()
                 .find(|v| v.profile.id == id)
-                .map(|v| status_label(&v.status).to_string())
+                .map(|v| v.status.clone())
                 .unwrap_or_default()
         }
     };
+    let for_label = raw_status.clone();
+    let for_dot = raw_status.clone();
+    let status = move || status_label(&for_label()).to_string();
+    let dot = move || match for_dot().as_str() {
+        "running" => theme::OK,
+        "starting" => theme::WARN,
+        "failed" => theme::ERROR,
+        _ => theme::BORDER,
+    };
+    let toggle_label = move || {
+        match raw_status().as_str() {
+            "running" | "starting" => "Stop",
+            _ => "Start",
+        }
+        .to_string()
+    };
+    let for_toggle = id.clone();
     theme::selectable(theme::WINDOW, move || {
         m.selected.get().as_deref() == Some(id_sel.as_str())
     })
+    .flex_row()
+    .items_center()
+    .gap_2()
     .px(px(10.0))
     .py(px(6.0))
     .rounded(px(6.0))
@@ -488,8 +508,20 @@ fn list_row(m: Model, id: String) -> impl IntoElement {
         m.importing.set(false);
         m.selected.set(Some(for_press.clone()));
     })
-    .child(text(name).text_size(px(13.0)).text_color(theme::TEXT))
-    .child(text(status).text_size(px(11.0)).text_color(theme::MUTED))
+    .child(view().w(px(8.0)).h(px(8.0)).rounded(px(4.0)).bg(dot))
+    .child(
+        view()
+            .flex_1()
+            .child(text(name).text_size(px(13.0)).text_color(theme::TEXT))
+            .child(text(status).text_size(px(11.0)).text_color(theme::MUTED)),
+    )
+    .child(theme::button(
+        toggle_label,
+        || true,
+        move || {
+            runtime().spawn(crate::tray::toggle_profile(for_toggle.clone()));
+        },
+    ))
 }
 
 pub fn profiles_section(m: Model) -> impl IntoElement {

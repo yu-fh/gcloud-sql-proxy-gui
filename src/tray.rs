@@ -409,7 +409,7 @@ fn rebuild_menu(delegate: &Delegate, menu: &NSMenu) {
 /// Which way round it goes is decided from the live status rather than from the
 /// check mark: the menu is at most half a second stale, and acting on a stale
 /// check mark could stop something the user just started.
-async fn toggle_profile(profile_id: String) {
+pub async fn toggle_profile(profile_id: String) {
     let state = state();
     let running = state.manager.lock().await.is_running(&profile_id);
 
