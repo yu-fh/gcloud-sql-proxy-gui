@@ -157,6 +157,8 @@ fn switch_row(
                 .w(px(38.0))
                 .h(px(22.0))
                 .rounded(px(11.0))
+                .cursor_pointer()
+                .transition()
                 .bg(move || {
                     if on.get() {
                         theme::ACCENT
@@ -476,23 +478,18 @@ fn list_row(m: Model, id: String) -> impl IntoElement {
                 .unwrap_or_default()
         }
     };
-    view()
-        .px(px(10.0))
-        .py(px(6.0))
-        .rounded(px(6.0))
-        .bg(move || {
-            if m.selected.get().as_deref() == Some(id_sel.as_str()) {
-                theme::SELECTED
-            } else {
-                theme::WINDOW
-            }
-        })
-        .on_press(move || {
-            m.importing.set(false);
-            m.selected.set(Some(for_press.clone()));
-        })
-        .child(text(name).text_size(px(13.0)).text_color(theme::TEXT))
-        .child(text(status).text_size(px(11.0)).text_color(theme::MUTED))
+    theme::selectable(theme::WINDOW, move || {
+        m.selected.get().as_deref() == Some(id_sel.as_str())
+    })
+    .px(px(10.0))
+    .py(px(6.0))
+    .rounded(px(6.0))
+    .on_press(move || {
+        m.importing.set(false);
+        m.selected.set(Some(for_press.clone()));
+    })
+    .child(text(name).text_size(px(13.0)).text_color(theme::TEXT))
+    .child(text(status).text_size(px(11.0)).text_color(theme::MUTED))
 }
 
 pub fn profiles_section(m: Model) -> impl IntoElement {
@@ -608,8 +605,8 @@ pub fn profiles_section(m: Model) -> impl IntoElement {
                         })
                     },
                 ))
-                .child(button(
-                    "Done",
+                .child(theme::primary_button(
+                    "Save",
                     move || m.dirty.get() && m.bad.get().is_empty(),
                     move || bridge::save(m.edit.get_untracked()),
                 )),

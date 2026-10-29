@@ -114,17 +114,10 @@ impl Model {
 }
 
 fn nav_row(label: &'static str, section: Section, current: Signal<Section>) -> impl IntoElement {
-    view()
+    theme::selectable(theme::SIDEBAR, move || current.get() == section)
         .px(px(12.0))
         .py(px(8.0))
         .rounded(px(6.0))
-        .bg(move || {
-            if current.get() == section {
-                theme::SELECTED
-            } else {
-                theme::SIDEBAR
-            }
-        })
         .on_press(move || {
             request_section(section);
             current.set(section);

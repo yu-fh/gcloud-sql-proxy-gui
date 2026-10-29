@@ -33,7 +33,7 @@
 use std::cell::RefCell;
 
 use objc2::rc::Retained;
-use objc2::runtime::{AnyObject, ProtocolObject};
+use objc2::runtime::{AnyObject, Bool, ProtocolObject};
 use objc2::{define_class, msg_send, sel, MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSApplicationDelegate, NSControlStateValueOn,
@@ -88,6 +88,15 @@ define_class!(
         /// The one place children are stopped, so every way of quitting (the
         /// menu, Cmd+Q, logout) goes through it. A leaked child keeps holding
         /// 15432/15433 and breaks the next launch.
+        /// Launching the app again (Finder, Spotlight, `open`) while it runs
+        /// only reaches here; with no Dock icon the menu-bar item may be
+        /// hidden, so show the window rather than do nothing.
+        #[unsafe(method(applicationShouldHandleReopen:hasVisibleWindows:))]
+        fn should_handle_reopen(&self, _app: &NSApplication, _visible: Bool) -> Bool {
+            window::open(Section::Profiles);
+            Bool::YES
+        }
+
         #[unsafe(method(applicationWillTerminate:))]
         fn will_terminate(&self, _n: &NSNotification) {
             shut_down();
