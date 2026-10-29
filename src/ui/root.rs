@@ -197,7 +197,14 @@ pub fn Settings() -> impl IntoElement {
                 .gap_1()
                 .bg(theme::SIDEBAR)
                 .child(nav_row("Profiles", Section::Profiles, section))
-                .child(nav_row("Logs", Section::Logs, section)),
+                .child(nav_row("Logs", Section::Logs, section))
+                .child(view().flex_1())
+                .child(
+                    text(concat!("Version ", env!("CARGO_PKG_VERSION")))
+                        .text_size(px(11.0))
+                        .text_color(theme::MUTED)
+                        .px(px(10.0)),
+                ),
         )
         .child(
             view().flex_1().child(banner).child(
