@@ -207,7 +207,7 @@ pub fn add() {
 pub fn import(command: String) {
     set_note("Importing…");
     runtime().spawn(async move {
-        match service::import_profile(state(), NEW_PROFILE_NAME.to_string(), command).await {
+        match service::import_profile(state(), String::new(), command).await {
             Ok(created) => {
                 write(|i| {
                     i.note = "Imported.".to_string();

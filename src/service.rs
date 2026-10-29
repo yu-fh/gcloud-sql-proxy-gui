@@ -280,6 +280,22 @@ pub async fn add_profile(state: &SharedState, name: String) -> Result<Profile, S
     Ok(profile)
 }
 
+/// The instance part of the first connection name (`project:region:instance`),
+/// or a generic name when there is none.
+pub fn suggested_name(profile: &Profile) -> String {
+    profile
+        .instances
+        .iter()
+        .find_map(|i| {
+            i.connection_name
+                .rsplit(':')
+                .next()
+                .filter(|s| !s.is_empty())
+        })
+        .map(str::to_string)
+        .unwrap_or_else(|| "New Environment".to_string())
+}
+
 /// A newly imported profile, plus what the import could not carry across.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ImportView {
@@ -313,6 +329,13 @@ pub async fn import_profile(
 
     let imported = import::parse_command(&command).map_err(|e| e.to_string())?;
 
+    // A command line carries no name, but its first instance has one worth
+    // starting from; the caller's, when given, wins.
+    let name = if name.trim().is_empty() {
+        suggested_name(&imported.profile)
+    } else {
+        name
+    };
     let taken: Vec<String> = config.profiles.iter().map(|p| p.id.clone()).collect();
     let id = profile::unique_id_from_name(&name, &taken);
 
@@ -685,6 +708,17 @@ fn find_profile<'a>(config: &'a ProfileConfig, id: &str) -> Result<&'a Profile, 
 mod tests {
     use super::*;
     use crate::core::profile::{Instance, InstanceRole, ProxyFlags};
+
+    #[test]
+    fn an_import_is_named_after_its_first_instance() {
+        let mut p = profile("x");
+        p.instances[0].connection_name = "fh-dev:us-central1:main-db".to_string();
+        assert_eq!(suggested_name(&p), "main-db");
+        for i in &mut p.instances {
+            i.connection_name = String::new();
+        }
+        assert_eq!(suggested_name(&p), "New Environment");
+    }
 
     fn profile(id: &str) -> Profile {
         Profile {

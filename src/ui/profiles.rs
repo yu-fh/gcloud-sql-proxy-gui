@@ -75,7 +75,7 @@ fn field_row(
     placeholder: &'static str,
     on_change: impl Fn(String) + 'static,
 ) -> impl IntoElement {
-    field_row_checked(label, value, placeholder, on_change, || false)
+    field_row_checked(label, value, placeholder, on_change, || false, false)
 }
 
 /// A field row that outlines itself in red while `invalid` holds.
@@ -85,6 +85,7 @@ fn field_row_checked(
     placeholder: &'static str,
     on_change: impl Fn(String) + 'static,
     invalid: impl Fn() -> bool + 'static,
+    focus: bool,
 ) -> impl IntoElement {
     row()
         .child(
@@ -96,6 +97,7 @@ fn field_row_checked(
         .child(
             input()
                 .default_value(value)
+                .auto_focus(focus)
                 .placeholder(placeholder)
                 .on_change(move |s: &str| on_change(s.to_string()))
                 .flex_1()
@@ -235,10 +237,19 @@ fn detail(m: Model, id: String) -> impl IntoElement {
     };
 
     let mut fields = group()
-        .child(field_row("Name", profile.name.clone(), "", {
-            let id = id_for(&id);
-            move |v| edit(m, &id, |p| p.name = v)
-        }))
+        .child(field_row_checked(
+            "Name",
+            profile.name.clone(),
+            "",
+            {
+                let id = id_for(&id);
+                move |v| edit(m, &id, |p| p.name = v)
+            },
+            || false,
+            // A just-added environment still has the placeholder name: that is
+            // the one thing the user has to type next.
+            profile.name == "New Environment",
+        ))
         .child(field_row("Project", profile.project.clone(), "", {
             let id = id_for(&id);
             move |v| edit(m, &id, |p| p.project = v)
@@ -285,6 +296,7 @@ fn detail(m: Model, id: String) -> impl IntoElement {
                     let key = format!("{id}:{index}");
                     move || m.bad.get().contains(&key)
                 },
+                false,
             ));
     }
 
@@ -499,14 +511,17 @@ fn list_row(m: Model, id: String) -> impl IntoElement {
     let for_label = raw_status.clone();
     let for_dot = raw_status.clone();
     let for_sub = raw_status.clone();
+    let for_hint = id.clone();
     let sub = move || {
-        let status = status_label(&for_sub()).to_string();
+        let mut parts = vec![status_label(&for_sub()).to_string()];
         let ports = ports();
-        if ports.is_empty() {
-            status
-        } else {
-            format!("{status} · port {ports}")
+        if !ports.is_empty() {
+            parts.push(format!("port {ports}"));
         }
+        if m.edit.get().iter().any(|p| p.id == for_hint && p.danger) {
+            parts.push("confirms before starting".to_string());
+        }
+        parts.join(" · ")
     };
     let dot = move || match for_dot().as_str() {
         "running" => theme::OK,

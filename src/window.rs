@@ -155,8 +155,12 @@ pub fn open(section: Section) {
         window.makeKeyAndOrderFront(None);
         OPEN.with(|o| *o.borrow_mut() = Some(Open { window, view }));
     }
+    let app = NSApplication::sharedApplication(mtm);
+    // `activate` is the macOS 14 cooperative call; the old one still wins when
+    // another app holds the foreground, so both are made.
+    app.activate();
     #[allow(deprecated)]
-    NSApplication::sharedApplication(mtm).activateIgnoringOtherApps(true);
+    app.activateIgnoringOtherApps(true);
 }
 
 fn item(
