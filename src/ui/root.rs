@@ -114,17 +114,10 @@ impl Model {
 }
 
 fn nav_row(label: &'static str, section: Section, current: Signal<Section>) -> impl IntoElement {
-    view()
+    theme::selectable(theme::SIDEBAR, move || current.get() == section)
         .px(px(12.0))
         .py(px(8.0))
         .rounded(px(6.0))
-        .bg(move || {
-            if current.get() == section {
-                theme::SELECTED
-            } else {
-                theme::SIDEBAR
-            }
-        })
         .on_press(move || {
             request_section(section);
             current.set(section);
@@ -139,6 +132,18 @@ pub fn Settings() -> impl IntoElement {
     let seen = signal(0u64);
 
     bridge::load_profiles(true, None);
+
+    // The same gate as the Save button: nothing to save, or a port still wrong.
+    on_key("mod+s", move |_| {
+        if m.dirty.get_untracked() && m.bad.get_untracked().is_empty() {
+            bridge::save(m.edit.get_untracked());
+        }
+    });
+    on_key("escape", move |_| {
+        if m.importing.get_untracked() {
+            m.importing.set(false);
+        }
+    });
 
     set_interval(POLL, move || {
         let want = requested();

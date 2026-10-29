@@ -71,19 +71,10 @@ fn chip(
     selected: impl Fn() -> bool + 'static,
     on_press: impl Fn() + 'static,
 ) -> impl IntoElement {
-    let selected = std::rc::Rc::new(selected);
-    let for_bg = selected.clone();
-    view()
+    theme::selectable(theme::GROUP, selected)
         .px_3()
         .py_1()
         .rounded(px(12.0))
-        .bg(move || {
-            if for_bg() {
-                theme::SELECTED
-            } else {
-                theme::GROUP
-            }
-        })
         .on_press(on_press)
         .child(text(label).text_size(px(12.0)).text_color(theme::TEXT))
 }
