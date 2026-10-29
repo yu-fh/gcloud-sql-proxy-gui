@@ -46,7 +46,8 @@ pub struct Model {
     pub live: Signal<Vec<ProfileView>>,
     /// The editor's own copy of the profiles.
     pub edit: Signal<Vec<Profile>>,
-    pub selected: Signal<Option<String>>,
+    /// The profile whose edit page is open, if any.
+    pub editing: Signal<Option<String>>,
     pub importing: Signal<bool>,
     pub dirty: Signal<bool>,
     /// Bumped when the editor's copy is replaced, so the detail pane rebuilds.
@@ -65,7 +66,7 @@ impl Model {
         Self {
             live: signal(Vec::new()),
             edit: signal(Vec::new()),
-            selected: signal(None),
+            editing: signal(None),
             importing: signal(false),
             dirty: signal(false),
             epoch: signal(0),
@@ -88,23 +89,24 @@ impl Model {
             // An import that went through replaced the panel's purpose; one that
             // failed never gets here, so the pasted text is still there to fix.
             self.importing.set(false);
+            self.editing.set(None);
             self.epoch.update(|e| *e += 1);
         }
         if data.saved {
             self.dirty.set(false);
+            self.editing.set(None);
         }
+        // A profile just added or imported opens straight into its edit page.
         if let Some(id) = data.select {
-            self.selected.set(Some(id));
+            self.editing.set(Some(id));
         }
-        // The selection must name a profile that exists; after a delete or a
-        // reload it may not, and an empty detail pane for a ghost is wrong.
-        let current = self.selected.get_untracked();
-        let valid = current
+        // The page must name a profile that exists; after a delete it may not.
+        let open = self.editing.get_untracked();
+        if open
             .as_ref()
-            .is_some_and(|id| data.profiles.iter().any(|v| &v.profile.id == id));
-        if !valid {
-            self.selected
-                .set(data.profiles.first().map(|v| v.profile.id.clone()));
+            .is_some_and(|id| !data.profiles.iter().any(|v| &v.profile.id == id))
+        {
+            self.editing.set(None);
         }
         self.ignored.set(data.ignored_flags);
         self.banner.set(data.banner);
@@ -142,6 +144,10 @@ pub fn Settings() -> impl IntoElement {
     on_key("escape", move |_| {
         if m.importing.get_untracked() {
             m.importing.set(false);
+        } else if m.editing.get_untracked().is_some() {
+            bridge::guarded(m.dirty.get_untracked(), "Cancelling", || {
+                bridge::load_profiles(true, None)
+            });
         }
     });
 
