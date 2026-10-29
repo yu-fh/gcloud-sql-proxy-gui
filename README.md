@@ -34,7 +34,7 @@ app reads the instances, ports and flags out of it.
 
 ## Requirements
 
-- macOS 11 or later
+- macOS 14 or later
 - `cloud-sql-proxy` — `brew install cloud-sql-proxy`
 - `gcloud`, authenticated once with `gcloud auth application-default login`
 - IAM permission to connect to the instances (typically via a group such as
@@ -72,14 +72,23 @@ instead — a locally built app is never quarantined.
 
 ## Build
 
+You need a Rust toolchain; there is nothing else to install.
+
 ```bash
-npm install
-npx tauri build
+scripts/bundle.sh --native
 ```
 
-The app bundle lands in `src-tauri/target/release/bundle/macos/`, and the DMG
-beside it in `bundle/dmg/`. For development, `npx tauri dev` runs it with hot
-reload.
+That builds for this machine's architecture and writes `dist/Cloud SQL Proxy.app`
+and a DMG beside it. Drop `--native` for the universal (Apple Silicon and Intel)
+build a release ships; it needs both targets,
+`rustup target add aarch64-apple-darwin x86_64-apple-darwin`.
+
+The bundle is signed ad hoc, which is what lets it launch. To sign it with a
+Developer ID instead, set `SIGN_IDENTITY` to the identity's name.
+
+For development, `cargo run` runs the app straight from the build directory.
+Set `FH_OPEN_WINDOW=profiles` (or `logs`) to open the settings window at launch
+instead of clicking through the menu.
 
 ## Using it
 
@@ -241,7 +250,7 @@ would `profiles.json` before sending it anywhere.
 ## Tests
 
 ```bash
-cd src-tauri && cargo test
+cargo test
 ```
 
 Process management is tested against a fake proxy script in `tests/fixtures/`,
@@ -252,11 +261,12 @@ verified rather than assumed.
 
 ## How it is built
 
-Tauri v2 — a Rust core plus one small webview window, with a sidebar for the two
-things a menu cannot do: a form and a log buffer.
+Rust and AppKit, with no webview. The tray is a native `NSStatusItem` and
+`NSMenu`; the settings window is an `NSWindow` whose contents are drawn by
+[nsh](https://github.com/longbridge/nsh), a native UI library. The window exists
+only while it is open, so an idle app holds no UI at all.
 
-The core (`src-tauri/src/core/`) has no Tauri dependency, so it tests
-standalone:
+The core (`src/core/`) has no UI dependency, so it tests standalone:
 
 | Module | Responsibility |
 | --- | --- |
@@ -269,19 +279,21 @@ standalone:
 | `proxy` | Owns the child processes; kills them on exit |
 | `state` | Decides what must stop before a profile can start |
 
-The Tauri layer above it is deliberately thin, and split by responsibility:
-`commands.rs` is the IPC surface, `tray.rs` builds and polls the menu,
-`window.rs` opens the settings window and remembers its geometry, `dialogs.rs`
-raises the native alerts both of them need. The tray and the window route start
-decisions through `core::state`, so they cannot disagree about what starting an
-environment means.
+Above it, split by responsibility:
 
-The frontend (`src/`) has no bundler — plain ES modules with relative imports,
-under a `default-src 'self'` CSP. `main.js` wires them together; `ipc.js` is the
-only module that touches `window.__TAURI__`; `shell.js` owns the sidebar and the
-window keyboard; `profiles-view.js` and `logs-view.js` are the two sections.
-Styles are split under `src/css/` and pulled in by `styles.css` in cascade
-order.
+| Module | Responsibility |
+| --- | --- |
+| `service` | The operations both surfaces call: list, start, stop, save, import, read logs |
+| `tray_model` | What the tray shows as plain data: labels, the four icon states, the blink |
+| `tray` | The `NSStatusItem`, its menu, and the poll loop that keeps them current |
+| `window` | The settings `NSWindow`, and the Edit and Window menus text fields need |
+| `ui/` | The Profiles and Logs views, written as nsh components |
+| `dialogs` | Native `NSAlert`s |
+| `autostart` | Launch at login, as a LaunchAgent |
+
+The tray and the window both go through `service`, so they cannot disagree about
+what starting an environment means. nsh runs on its own thread and the service
+is async on tokio, so `ui/bridge.rs` carries results from one to the other.
 
 Configuration lives in
 `~/Library/Application Support/ai.firsthand.fh-cloud-sql-proxy-gui/profiles.json`.
